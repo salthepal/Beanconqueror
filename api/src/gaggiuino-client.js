@@ -527,22 +527,38 @@ function getBrewTemperature(shot) {
 function getFirstDripSeconds(shot) {
   const times = getFirstArray(shot, ['datapoints.timeInShot']);
   const weights = getFirstArray(shot, ['datapoints.shotWeight']);
-  const flows = getFirstArray(shot, ['datapoints.weightFlow']);
-  const length = Math.max(times.length, weights.length, flows.length);
+  const length = Math.max(times.length, weights.length);
 
+  // Find the first index where weight becomes consistently positive.
+  // Single-spike noise (e.g. 0, 0, 1, 0, 0) is ignored;
+  // we require at least 2 of the next 3 readings to also be > 0.
   for (let index = 0; index < length; index++) {
     const weight = Number(weights[index]);
-    const flow = Number(flows[index]);
-    if (
-      (Number.isFinite(weight) && weight > 0) ||
-      (Number.isFinite(flow) && flow > 0)
-    ) {
+    if (!Number.isFinite(weight) || weight <= 0) {
+      continue;
+    }
+
+    // Confirm this is sustained weight, not sensor noise
+    let sustainedCount = 1;
+    const lookAhead = Math.min(3, length - index - 1);
+    for (let j = 1; j <= lookAhead; j++) {
+      const nextWeight = Number(weights[index + j]);
+      if (Number.isFinite(nextWeight) && nextWeight > 0) {
+        sustainedCount++;
+      }
+    }
+    if (sustainedCount >= 2) {
       return normalizeShotTimeSeconds(
         times[index],
         shot,
         normalizeDurationSeconds({ duration: index }),
       );
     }
+  }
+
+  return 0;
+}
+
   }
 
   return 0;
