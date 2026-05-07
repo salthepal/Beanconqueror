@@ -304,7 +304,7 @@ function createGaggiuinoMill() {
 
 function createGaggiuinoPreparation() {
   const visibleParameters = {
-    bean: true,
+    bean_type: true,
     brew_beverage_quantity: true,
     brew_temperature: true,
     brew_time: true,
