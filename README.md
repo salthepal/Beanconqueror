@@ -46,6 +46,8 @@ Services:
 - `SESSION_SIGNING_SECRET` (required in production)
 - `FEATURE_FLAGS_JSON` (optional JSON string)
 - `CORS_ORIGINS` (comma-separated origins; default same-origin only)
+- `TAILSCALE_HOSTNAMES` (comma-separated `*.ts.net` hostnames; API derives HTTPS CORS origins)
+- `TAILSCALE_ALLOW_HTTP` (`true|false`, default `false`; only enable if you intentionally use plain HTTP over tailnet)
 
 ### Database
 
@@ -164,6 +166,17 @@ More details:
 - [docs/local-testing.md](docs/local-testing.md)
 - [docs/container-deployment.md](docs/container-deployment.md)
 - [.env.example](.env.example)
+
+## Tailscale compatibility
+
+No hardcoded tailnet IP needed.
+
+Set in `.env`:
+
+- `TAILSCALE_HOSTNAMES=your-node-name.ts.net`
+- keep `TAILSCALE_ALLOW_HTTP=false` unless you require plain HTTP
+
+API will auto-allow matching Tailscale origins for CORS.
 
 ## Container publishing
 

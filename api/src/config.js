@@ -25,6 +25,32 @@ function readBoolean(name, fallback = false) {
   return fallback;
 }
 
+function readHostnameList(name) {
+  return (process.env[name] || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function buildCorsOrigins() {
+  const explicitOrigins = readCsv('CORS_ORIGINS');
+  const tailscaleHosts = readHostnameList('TAILSCALE_HOSTNAMES');
+  const tailscaleAllowHttp = readBoolean('TAILSCALE_ALLOW_HTTP', false);
+  const derivedOrigins = [];
+
+  for (const host of tailscaleHosts) {
+    if (!host.endsWith('.ts.net')) {
+      continue;
+    }
+    derivedOrigins.push(`https://${host}`);
+    if (tailscaleAllowHttp) {
+      derivedOrigins.push(`http://${host}`);
+    }
+  }
+
+  return Array.from(new Set([...explicitOrigins, ...derivedOrigins]));
+}
+
 const config = {
   nodeEnv: process.env.NODE_ENV || 'production',
   isDevelopment: (process.env.NODE_ENV || 'production') === 'development',
@@ -38,7 +64,7 @@ const config = {
   rateLimitMaxMutations: readInteger('RATE_LIMIT_MAX_MUTATIONS', 120),
   metricsEnabled: readBoolean('METRICS_ENABLED', true),
   idempotencyTtlSeconds: readInteger('IDEMPOTENCY_TTL_SECONDS', 3600),
-  corsOrigins: readCsv('CORS_ORIGINS'),
+  corsOrigins: buildCorsOrigins(),
   db: {
     host: process.env.DB_HOST || 'mariadb',
     port: readInteger('DB_PORT', 3306),

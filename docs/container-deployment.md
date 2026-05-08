@@ -70,6 +70,8 @@ Supported API config:
 - `DB_USER`
 - `DB_PASSWORD`
 - `CORS_ORIGINS`
+- `TAILSCALE_HOSTNAMES`
+- `TAILSCALE_ALLOW_HTTP`
 - `API_CLIENT_TOKEN`
 - `SESSION_SIGNING_SECRET`
 - `GAGGIUINO_BASE_URL`
@@ -78,6 +80,25 @@ Supported API config:
 The generated `assets/env.js` is loaded by `src/index.html` before app bootstrap.
 
 `CORS_ORIGINS` is empty by default. Leave it empty for the bundled same-origin app. Set it only when a separate trusted origin must call the API.
+
+`TAILSCALE_HOSTNAMES` accepts comma-separated `*.ts.net` hostnames and auto-derives allowed HTTPS CORS origins. No tailnet IP hardcoding required.
+
+`TAILSCALE_ALLOW_HTTP=false` by default. Change to `true` only if you intentionally run plain HTTP inside tailnet.
+
+## Tailscale Quick Setup
+
+In `.env`:
+
+```text
+TAILSCALE_HOSTNAMES=your-node.ts.net
+TAILSCALE_ALLOW_HTTP=false
+```
+
+Then restart:
+
+```bash
+docker compose up -d
+```
 
 ## API Endpoints
 
