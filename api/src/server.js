@@ -554,12 +554,14 @@ function startGaggiuinoAutoSyncMonitor() {
   let running = false;
 
   const schedule = (delayMs) => {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    if (timer) clearTimeout(timer);
     const delay = clampInterval(delayMs, config.gaggiuino.autoSyncIntervalMs);
     timer = setTimeout(runTick, delay);
-    updateAutoSyncState({ enabled: true, running, nextPollInMs: delay }).catch(() => {});
+    updateAutoSyncState({
+      enabled: true,
+      running,
+      nextPollInMs: delay,
+    }).catch((err) => console.error('Failed to update auto-sync state:', err));
   };
 
   const runTick = async () => {
@@ -569,6 +571,14 @@ function startGaggiuinoAutoSyncMonitor() {
     }
 
     running = true;
+    const checkedAt = new Date().toISOString();
+    await updateAutoSyncState({
+      enabled: true,
+      running: true,
+      lastCheckedAt: checkedAt,
+    }).catch((err) => console.error('Failed to update auto-sync state:', err));
+
+    let nextDelay = config.gaggiuino.autoSyncIntervalMs;
     try {
       const settings = await getGaggiuinoSettings();
       if (!settings.autoSyncEnabled) {
@@ -579,12 +589,12 @@ function startGaggiuinoAutoSyncMonitor() {
           consecutiveFailures: 0,
           lastError: '',
           nextPollInMs: config.gaggiuino.autoSyncIntervalMs,
-        }).catch(() => {});
-        schedule(config.gaggiuino.autoSyncIntervalMs);
+        }).catch((err) => console.error('Failed to update auto-sync state:', err));
+        nextDelay = config.gaggiuino.autoSyncIntervalMs;
         return;
       }
 
-      await syncNewShotsSinceLast({
+      const result = await syncNewShotsSinceLast({
         maxShotsPerRun: config.gaggiuino.autoSyncBatchSize,
         initialImportCount: config.gaggiuino.autoSyncInitialImportCount,
       });
@@ -595,8 +605,10 @@ function startGaggiuinoAutoSyncMonitor() {
         running: false,
         lastSuccessAt: new Date().toISOString(),
         lastError: '',
-      }).catch(() => {});
-      schedule(config.gaggiuino.autoSyncIntervalMs);
+        lastImportedCount: result.imported.length,
+        lastSyncSummary: result.sync,
+      }).catch((err) => console.error('Failed to update auto-sync state:', err));
+      nextDelay = config.gaggiuino.autoSyncIntervalMs;
     } catch (error) {
       metrics.syncFailureCount += 1;
       await updateAutoSyncState({
@@ -604,10 +616,11 @@ function startGaggiuinoAutoSyncMonitor() {
         online: false,
         running: false,
         lastError: error?.message || String(error),
-      }).catch(() => {});
-      schedule(config.gaggiuino.autoSyncMaxBackoffMs);
+      }).catch((err) => console.error('Failed to update auto-sync state:', err));
+      nextDelay = config.gaggiuino.autoSyncMaxBackoffMs;
     } finally {
       running = false;
+      schedule(nextDelay);
     }
   };
 
@@ -619,9 +632,7 @@ function startAiAnalysisMonitor() {
   let running = false;
 
   const schedule = async (delayMs) => {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    if (timer) clearTimeout(timer);
     const aiConfig = await getAiAnalysisConfig();
     const cadenceMs = clampInterval(
       aiConfig.cadenceHours * 60 * 60 * 1000,
@@ -633,7 +644,7 @@ function startAiAnalysisMonitor() {
 
   const runTick = async () => {
     if (running) {
-      schedule(60 * 1000).catch(() => {});
+      schedule(60 * 1000).catch((err) => console.error('AI analysis schedule error:', err));
       return;
     }
 
@@ -662,18 +673,18 @@ function startAiAnalysisMonitor() {
       nextDelay = Math.min(6 * 60 * 60 * 1000, nextDelay * 2);
     } finally {
       running = false;
-      schedule(nextDelay).catch(() => {});
+      schedule(nextDelay).catch((err) => console.error('AI analysis schedule error:', err));
     }
   };
 
-  schedule(10 * 1000).catch(() => {});
+  schedule(10 * 1000).catch((err) => console.error('AI analysis schedule error:', err));
 }
 
 async function start() {
   await migrate();
   const settings = await getGaggiuinoSettings();
   await updateAutoSyncState({ enabled: settings.autoSyncEnabled, running: false }).catch(
-    () => {},
+    (err) => console.error('Failed to initialize auto-sync state:', err),
   );
 
   const server = http.createServer((request, response) => {

@@ -171,12 +171,12 @@ export class StatisticPage implements OnInit {
       const brewsForCountry = brews.filter((b) =>
         beansForCountry.some((bean) => bean.config.uuid === b.bean),
       );
+      if (!country || brewsForCountry.length === 0) continue;
       const totalRating = brewsForCountry.reduce(
         (acc, brew) => acc + brew.rating,
         0,
       );
       const avgRating = totalRating / brewsForCountry.length;
-      if (!country) continue;
       data.labels.push(country);
       data.datasets[0].data.push(avgRating);
     }
@@ -478,7 +478,17 @@ export class StatisticPage implements OnInit {
     const runtimeConfig = (window as unknown as {
       __beanconquerorConfig?: { apiBaseUrl?: string };
     }).__beanconquerorConfig;
-    const apiBaseUrl = runtimeConfig?.apiBaseUrl || '/api';
+    const rawBaseUrl = runtimeConfig?.apiBaseUrl;
+    if (
+      !rawBaseUrl ||
+      typeof rawBaseUrl !== 'string' ||
+      rawBaseUrl.trim() === '' ||
+      rawBaseUrl.includes('${') ||
+      rawBaseUrl.trimStart().startsWith('$')
+    ) {
+      throw new Error('Server mode not configured');
+    }
+    const apiBaseUrl = rawBaseUrl.trim().replace(/\/+$/, '');
     const normalizedPath = path.startsWith('/api') ? path.slice(4) : path;
     const headers = new Headers(options.headers);
     headers.set('Content-Type', 'application/json');

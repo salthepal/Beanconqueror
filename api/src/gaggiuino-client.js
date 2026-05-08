@@ -26,10 +26,14 @@ function normalizeBaseUrl(baseUrl) {
 
 async function getGaggiuinoSettings() {
   const settings = await getStorageValue(GAGGIUINO_SETTINGS_KEY);
+  const parsedTimeoutMs = Number(settings?.timeoutMs);
   return {
-    baseUrl: settings?.baseUrl || config.gaggiuino.baseUrl,
-    timeoutMs: Number(settings?.timeoutMs) || config.gaggiuino.timeoutMs,
-    designatedMillUuid: settings?.designatedMillUuid || GAGGIUINO_MILL_UUID,
+    baseUrl: settings?.baseUrl ?? config.gaggiuino.baseUrl,
+    timeoutMs: Number.isFinite(parsedTimeoutMs)
+      ? parsedTimeoutMs
+      : config.gaggiuino.timeoutMs,
+    designatedMillUuid:
+      settings?.designatedMillUuid ?? GAGGIUINO_MILL_UUID,
     autoSyncEnabled:
       settings?.autoSyncEnabled !== undefined
         ? Boolean(settings.autoSyncEnabled)
@@ -38,19 +42,28 @@ async function getGaggiuinoSettings() {
 }
 
 async function updateGaggiuinoSettings(settings) {
+  const current = await getGaggiuinoSettings();
+  const parsedTimeoutMs = Number(settings?.timeoutMs);
   const nextSettings = {
-    baseUrl: String(settings?.baseUrl || config.gaggiuino.baseUrl).trim(),
+    baseUrl: String(
+      settings?.baseUrl ?? current.baseUrl,
+    ).trim(),
     timeoutMs: Math.max(
       1000,
-      Math.min(Number(settings?.timeoutMs) || config.gaggiuino.timeoutMs, 30000),
+      Math.min(
+        Number.isFinite(parsedTimeoutMs)
+          ? parsedTimeoutMs
+          : current.timeoutMs,
+        30000,
+      ),
     ),
     designatedMillUuid: String(
-      settings?.designatedMillUuid || GAGGIUINO_MILL_UUID,
+      settings?.designatedMillUuid ?? current.designatedMillUuid,
     ).trim(),
     autoSyncEnabled:
       settings?.autoSyncEnabled !== undefined
         ? Boolean(settings.autoSyncEnabled)
-        : config.gaggiuino.autoSyncEnabled,
+        : current.autoSyncEnabled,
   };
 
   if (!nextSettings.baseUrl.startsWith('http')) {
@@ -291,7 +304,7 @@ function createGaggiuinoMill() {
 
 function createGaggiuinoPreparation() {
   const visibleParameters = {
-    bean: true,
+    bean_type: true,
     brew_beverage_quantity: true,
     brew_temperature: true,
     brew_time: true,
@@ -299,6 +312,7 @@ function createGaggiuinoPreparation() {
     grind_weight: true,
     mill: true,
     pressure_profile: true,
+    rating: true,
   };
 
   return {
@@ -311,7 +325,7 @@ function createGaggiuinoPreparation() {
     use_custom_parameters: true,
     manage_parameters: visibleParameters,
     default_last_coffee_parameters: visibleParameters,
-    visible_list_view_parameters: {},
+    visible_list_view_parameters: { rating: true },
     repeat_coffee_parameters: { repeat_coffee_active: false },
     brew_order: {},
     tools: [],
@@ -513,22 +527,38 @@ function getBrewTemperature(shot) {
 function getFirstDripSeconds(shot) {
   const times = getFirstArray(shot, ['datapoints.timeInShot']);
   const weights = getFirstArray(shot, ['datapoints.shotWeight']);
-  const flows = getFirstArray(shot, ['datapoints.weightFlow']);
-  const length = Math.max(times.length, weights.length, flows.length);
+  const length = Math.max(times.length, weights.length);
 
+  // Find the first index where weight becomes consistently positive.
+  // Single-spike noise (e.g. 0, 0, 1, 0, 0) is ignored;
+  // we require at least 2 of the next 3 readings to also be > 0.
   for (let index = 0; index < length; index++) {
     const weight = Number(weights[index]);
-    const flow = Number(flows[index]);
-    if (
-      (Number.isFinite(weight) && weight > 0) ||
-      (Number.isFinite(flow) && flow > 0)
-    ) {
+    if (!Number.isFinite(weight) || weight <= 0) {
+      continue;
+    }
+
+    // Confirm this is sustained weight, not sensor noise
+    let sustainedCount = 1;
+    const lookAhead = Math.min(3, length - index - 1);
+    for (let j = 1; j <= lookAhead; j++) {
+      const nextWeight = Number(weights[index + j]);
+      if (Number.isFinite(nextWeight) && nextWeight > 0) {
+        sustainedCount++;
+      }
+    }
+    if (sustainedCount >= 2) {
       return normalizeShotTimeSeconds(
         times[index],
         shot,
         normalizeDurationSeconds({ duration: index }),
       );
     }
+  }
+
+  return 0;
+}
+
   }
 
   return 0;

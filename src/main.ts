@@ -37,7 +37,13 @@ function isServerStorageRuntime(): boolean {
     __beanconquerorConfig?: { apiBaseUrl?: string };
   }).__beanconquerorConfig;
 
-  return !!runtimeConfig?.apiBaseUrl;
+  const rawBaseUrl = runtimeConfig?.apiBaseUrl;
+  return (
+    typeof rawBaseUrl === 'string' &&
+    rawBaseUrl.trim() !== '' &&
+    !rawBaseUrl.includes('${') &&
+    !rawBaseUrl.trimStart().startsWith('$')
+  );
 }
 
 function unregisterServiceWorkersForServerStorage(): void {
@@ -45,11 +51,16 @@ function unregisterServiceWorkersForServerStorage(): void {
     return;
   }
 
-  navigator.serviceWorker.getRegistrations().then((registrations) => {
-    for (const registration of registrations) {
-      registration.unregister();
-    }
-  });
+  navigator.serviceWorker
+    .getRegistrations()
+    .then((registrations: ServiceWorkerRegistration[]) => {
+      for (const registration of registrations) {
+        registration.unregister();
+      }
+    })
+    .catch((err: unknown) =>
+      console.warn('Failed to unregister service workers:', err),
+    );
 }
 
 if (environment.production) {
