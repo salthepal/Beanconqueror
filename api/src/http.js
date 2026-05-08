@@ -70,7 +70,11 @@ function parseCookies(request) {
 
     const key = pair.substring(0, index).trim();
     const value = pair.substring(index + 1).trim();
-    acc[key] = decodeURIComponent(value);
+    try {
+      acc[key] = decodeURIComponent(value);
+    } catch (_error) {
+      acc[key] = value;
+    }
     return acc;
   }, {});
 }

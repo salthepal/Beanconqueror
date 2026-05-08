@@ -7,6 +7,7 @@ class RateLimiter {
 
   hit(key) {
     const now = Date.now();
+    this.pruneExpired(now);
     const existing = this.buckets.get(key);
 
     if (!existing || now > existing.resetAt) {
@@ -20,6 +21,14 @@ class RateLimiter {
     }
 
     return { allowed: true, remaining: this.maxPerWindow - existing.count };
+  }
+
+  pruneExpired(now) {
+    for (const [bucketKey, bucket] of this.buckets.entries()) {
+      if (now > bucket.resetAt) {
+        this.buckets.delete(bucketKey);
+      }
+    }
   }
 }
 

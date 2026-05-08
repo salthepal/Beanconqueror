@@ -106,8 +106,7 @@ function isMutation(method) {
 }
 
 function isAuthorized(request) {
-  const userAgent = String(request.headers['user-agent'] || '');
-  const appearsBrowser = /mozilla|chrome|safari|firefox|edg\//i.test(userAgent);
+  const appearsBrowser = Boolean(request.headers.origin);
   const cookies = parseCookies(request);
   const sessionToken = cookies[SESSION_COOKIE_NAME];
 
@@ -160,16 +159,35 @@ function maybeIssueSessionCookie(request, response) {
   response.setHeader('Set-Cookie', buildSessionCookie(token, config.sessionTtlSeconds));
 }
 
+function getRateLimitKey(request) {
+  const clientToken = request.headers['x-beanconqueror-client-token'];
+  if (clientToken) {
+    return `token:${clientToken}`;
+  }
+
+  const cookies = parseCookies(request);
+  const sessionToken = cookies[SESSION_COOKIE_NAME];
+  if (sessionToken) {
+    const digest = crypto.createHash('sha256').update(sessionToken).digest('hex');
+    return `session:${digest}`;
+  }
+
+  const forwarded = String(request.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
+  if (forwarded) {
+    return `ip:${forwarded}`;
+  }
+
+  return `ip:${request.socket.remoteAddress || 'unknown'}`;
+}
+
 function enforceRateLimit(request) {
   if (!isMutation(request.method)) {
     return;
   }
 
-  const key = String(
-    request.headers['x-beanconqueror-client-token'] ||
-      request.socket.remoteAddress ||
-      'unknown',
-  );
+  const key = getRateLimitKey(request);
   const result = limiter.hit(key);
   if (!result.allowed) {
     throw new HttpError(429, 'rate_limited', 'Too many requests');
@@ -177,6 +195,9 @@ function enforceRateLimit(request) {
 }
 
 function getIdempotencyKey(request) {
+  if (!isMutation(request.method)) {
+    return null;
+  }
   const raw = request.headers['idempotency-key'];
   if (!raw || typeof raw !== 'string') {
     return null;
@@ -202,27 +223,24 @@ async function saveIdempotentResponse(idempotencyKey, status, payload) {
 
 async function handleStorage(request, response, url) {
   if (url.pathname === '/api/storage' && request.method === 'GET') {
-    sendJson(response, 200, await getAllStorage());
-    return true;
+    return { handled: true, payload: await getAllStorage(), status: 200 };
   }
 
   if (url.pathname === '/api/storage/import' && request.method === 'POST') {
     const body = await readJson(request, config.requestBodyLimitBytes);
     validateStorageImport(body);
     await importStorage(body);
-    sendNoContent(response);
-    return true;
+    return { handled: true, payload: {}, status: 204 };
   }
 
   if (url.pathname === '/api/storage' && request.method === 'DELETE') {
     await clearStorage();
-    sendNoContent(response);
-    return true;
+    return { handled: true, payload: {}, status: 204 };
   }
 
   const key = getStorageKey(url.pathname);
   if (!key) {
-    return false;
+    return { handled: false };
   }
 
   if (request.method === 'GET') {
@@ -231,8 +249,7 @@ async function handleStorage(request, response, url) {
       throw new HttpError(404, 'not_found', 'Storage key not found');
     }
 
-    sendJson(response, 200, { key, value });
-    return true;
+    return { handled: true, payload: { key, value }, status: 200 };
   }
 
   if (request.method === 'PUT') {
@@ -242,11 +259,10 @@ async function handleStorage(request, response, url) {
       key,
       Object.prototype.hasOwnProperty.call(body, 'value') ? body.value : body,
     );
-    sendNoContent(response);
-    return true;
+    return { handled: true, payload: {}, status: 204 };
   }
 
-  return false;
+  return { handled: false };
 }
 
 async function handleGaggiuino(request, response, url) {
@@ -410,6 +426,21 @@ async function handleOperationalRoutes(request, response, url) {
   return false;
 }
 
+async function handlePublicOperationalRoutes(request, response, url) {
+  if (url.pathname === '/health' && request.method === 'GET') {
+    sendJson(response, 200, { ok: true });
+    return true;
+  }
+
+  if (url.pathname === '/ready' && request.method === 'GET') {
+    const dbReady = await checkDatabaseReady().catch(() => false);
+    sendJson(response, dbReady ? 200 : 503, { ok: dbReady });
+    return true;
+  }
+
+  return false;
+}
+
 async function route(request, response) {
   metrics.requestCount += 1;
   const startedAt = Date.now();
@@ -424,13 +455,17 @@ async function route(request, response) {
     }
 
     const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-    if (await handleOperationalRoutes(request, response, url)) {
+    if (await handlePublicOperationalRoutes(request, response, url)) {
       return;
     }
 
-    maybeIssueSessionCookie(request, response);
     if (!isAuthorized(request)) {
       throw new HttpError(401, 'unauthorized', 'Authentication required');
+    }
+    maybeIssueSessionCookie(request, response);
+
+    if (await handleOperationalRoutes(request, response, url)) {
+      return;
     }
 
     enforceRateLimit(request);
@@ -441,8 +476,18 @@ async function route(request, response) {
       return;
     }
 
-    if (await handleStorage(request, response, url)) {
-      await saveIdempotentResponse(idempotencyKey, response.statusCode || 204, {});
+    const storageResult = await handleStorage(request, response, url);
+    if (storageResult.handled) {
+      if (storageResult.status === 204) {
+        sendNoContent(response);
+      } else {
+        sendJson(response, storageResult.status, storageResult.payload);
+      }
+      await saveIdempotentResponse(
+        idempotencyKey,
+        storageResult.status,
+        storageResult.payload,
+      );
       return;
     }
 
@@ -632,7 +677,10 @@ async function start() {
   );
 
   const server = http.createServer((request, response) => {
-    route(request, response).catch(() => {
+    route(request, response).catch((error) => {
+      log('error', 'request_handler_failed', {
+        errorMessage: error?.message || String(error),
+      });
       sendError(
         response,
         500,

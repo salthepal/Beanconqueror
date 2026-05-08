@@ -26,7 +26,7 @@ import {
   Platform,
 } from '@ionic/angular/standalone';
 
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { AgVirtualScrollComponent } from 'ag-virtual-scroll';
 import _ from 'lodash';
 import { Subscription } from 'rxjs';
@@ -109,6 +109,7 @@ export class BeansPage implements OnDestroy {
   private readonly cloudAiBeanImportService = inject(CloudAIBeanImportService);
   private readonly uiAlert = inject(UIAlert);
   private readonly uiFileHelper = inject(UIFileHelper);
+  private readonly translate = inject(TranslateService);
 
   public beans: Bean[] = [];
 
@@ -513,12 +514,13 @@ export class BeansPage implements OnDestroy {
 
   public async bulkFavoriteVisible() {
     const target = this.getBulkTargetBeans();
-    for (const bean of target) {
-      if (!bean.favourite) {
+    const updates = target
+      .filter((bean) => !bean.favourite)
+      .map(async (bean) => {
         bean.favourite = true;
         await this.uiBeanStorage.update(bean);
-      }
-    }
+      });
+    await Promise.all(updates);
     this.clearSelection();
     this.refreshBeansView();
   }
@@ -529,19 +531,20 @@ export class BeansPage implements OnDestroy {
       return;
     }
     const confirm = await this.uiAlert.showConfirm(
-      `Archive ${target.length} beans?`,
-      'Confirm',
+      `${this.translate.instant('TAB_ARCHIVE')} (${target.length})`,
+      this.translate.instant('NAV_BEANS'),
       false,
     );
     if (confirm !== 'YES') {
       return;
     }
-    for (const bean of target) {
-      if (!bean.finished) {
+    const updates = target
+      .filter((bean) => !bean.finished)
+      .map(async (bean) => {
         bean.finished = true;
         await this.uiBeanStorage.update(bean);
-      }
-    }
+      });
+    await Promise.all(updates);
     this.clearSelection();
     this.refreshBeansView();
   }
@@ -552,21 +555,22 @@ export class BeansPage implements OnDestroy {
       return;
     }
     const confirm = await this.uiAlert.showConfirm(
-      `Freeze ${visible.length} beans?`,
-      'Confirm',
+      `${this.translate.instant('FROZEN_BEANS')} (${visible.length})`,
+      this.translate.instant('NAV_BEANS'),
       false,
     );
     if (confirm !== 'YES') {
       return;
     }
     const frozenDate = new Date().toISOString();
-    for (const bean of visible) {
-      if (!bean.isFrozen()) {
+    const updates = visible
+      .filter((bean) => !bean.isFrozen())
+      .map(async (bean) => {
         bean.frozenDate = frozenDate;
         bean.unfrozenDate = '';
         await this.uiBeanStorage.update(bean);
-      }
-    }
+      });
+    await Promise.all(updates);
     this.clearSelection();
     this.refreshBeansView();
   }
