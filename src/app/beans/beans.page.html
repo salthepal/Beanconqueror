@@ -54,12 +54,66 @@
   </ion-segment>
   @switch (bean_segment) {
   @case ('open') {
+  <div class="ion-padding-horizontal ion-padding-bottom">
+    <ion-segment [(ngModel)]="quickOpenFilter" (ionChange)="quickFilterChanged()" class="quick-filter-segment">
+      <ion-segment-button value="all"><ion-label>All</ion-label></ion-segment-button>
+      <ion-segment-button value="favorites"><ion-label>Favorites</ion-label></ion-segment-button>
+      <ion-segment-button value="recent"><ion-label>Recent</ion-label></ion-segment-button>
+      <ion-segment-button value="low"><ion-label>Running Low</ion-label></ion-segment-button>
+    </ion-segment>
+    <div class="actions-row ion-padding-top">
+      <ion-button fill="outline" size="small" (click)="longPressAdd($event)">Add Bean</ion-button>
+      <ion-button fill="outline" size="small" (click)="openImportMenu()">Import</ion-button>
+      <ion-button fill="outline" size="small" (click)="scanBean()">Scan</ion-button>
+      <ion-button
+        [fill]="uiIsCollapseActive ? 'solid' : 'outline'"
+        size="small"
+        (click)="toggleCollapseBeans()"
+      >
+        Compact
+      </ion-button>
+      <ion-button [fill]="selectionMode ? 'solid' : 'outline'" size="small" (click)="toggleSelectionMode()">
+        Select
+      </ion-button>
+    </div>
+    <div class="density-row ion-padding-top">
+      <ion-segment [(ngModel)]="compactDensity" (ionChange)="densityChanged()">
+        <ion-segment-button value="comfortable"><ion-label>Comfort</ion-label></ion-segment-button>
+        <ion-segment-button value="compact"><ion-label>Compact</ion-label></ion-segment-button>
+        <ion-segment-button value="ultra"><ion-label>Ultra</ion-label></ion-segment-button>
+      </ion-segment>
+      <ion-searchbar
+        class="threshold-input"
+        type="number"
+        inputmode="numeric"
+        debounce="300"
+        placeholder="Low g threshold"
+        [(ngModel)]="lowBeanThreshold"
+        (ionChange)="thresholdChanged()"
+      ></ion-searchbar>
+    </div>
+    <div class="bulk-row ion-padding-top">
+      @if (selectionMode) {
+      <div class="selection-meta">{{ getSelectedCount() }} selected</div>
+      <ion-button fill="outline" size="small" (click)="clearSelection()">Clear</ion-button>
+      }
+      <ion-button fill="outline" size="small" color="warning" (click)="bulkFavoriteVisible()">Favorite</ion-button>
+      <ion-button fill="outline" size="small" color="medium" (click)="bulkFreezeVisible()">Freeze</ion-button>
+      <ion-button fill="outline" size="small" color="danger" (click)="bulkArchiveVisible()">Archive</ion-button>
+    </div>
+  </div>
   @if (openBeans?.length > 0 || uiShallBarBeDisplayed || uiIsTextSearchActive || uiIsFilterActive || uiIsSortActive) {
   <div class="ion-justify-content-end container" style="margin-left:10px;margin-right:10px;margin-bottom:20px;">
     <ng-container [ngTemplateOutlet]="beanSearchToolbar"></ng-container>
   </div>
   }
-  @if (openBeans.length == 0) {
+  @if (loadingBeans) {
+  <div class="ion-padding-horizontal">
+    <ion-skeleton-text animated style="width:100%;height:72px"></ion-skeleton-text>
+    <ion-skeleton-text animated style="width:100%;height:72px"></ion-skeleton-text>
+    <ion-skeleton-text animated style="width:100%;height:72px"></ion-skeleton-text>
+  </div>
+  } @else if (openBeans.length == 0) {
   <div class="ion-padding ion-text-center">
     <div>
       <ion-icon color="inactive" name="beanconqueror-beans" size="large"></ion-icon>
@@ -69,12 +123,28 @@
     </div>
   </div>
   }
-  <ag-virtual-scroll #openScroll [items]="openBeans" [height]="'100vh'" [min-row-height]="uiIsCollapseActive?60:210">
+  <ag-virtual-scroll #openScroll [items]="openBeans" [height]="'100vh'" [min-row-height]="getRowHeight()">
     @for (item of openScroll.items; track item) {
     @if (item['beans']) {
+    @if (selectionMode) {
+    <div class="selection-row">
+      <ion-checkbox
+        [checked]="isSelected(item)"
+        (ionChange)="toggleSelected(item, $event.detail.checked)"
+      ></ion-checkbox>
+    </div>
+    }
     <bean-information [id]="'bean-group-' + item['frozenGroupId']" [collapsed]='uiIsCollapseActive' (beanAction)="beanAction($event)" [bean]="item['beans'][0]"
       [beanGroup]="item"></bean-information>
     } @else {
+    @if (selectionMode) {
+    <div class="selection-row">
+      <ion-checkbox
+        [checked]="isSelected(item)"
+        (ionChange)="toggleSelected(item, $event.detail.checked)"
+      ></ion-checkbox>
+    </div>
+    }
     <bean-information [id]="'bean-' + item['config'].uuid" [collapsed]='uiIsCollapseActive' (beanAction)="beanAction($event)" [bean]="item"></bean-information>
     }
     }
@@ -98,12 +168,28 @@
   </div>
   }
   <ag-virtual-scroll #frozenScroll [items]="frozenBeans" [height]="'100vh'"
-    [min-row-height]="uiIsCollapseActive?60:210">
+    [min-row-height]="getRowHeight()">
     @for (item of frozenScroll.items; track item) {
     @if (item['beans']) {
+    @if (selectionMode) {
+    <div class="selection-row">
+      <ion-checkbox
+        [checked]="isSelected(item)"
+        (ionChange)="toggleSelected(item, $event.detail.checked)"
+      ></ion-checkbox>
+    </div>
+    }
     <bean-information [id]="'bean-group-' + item['frozenGroupId']" [collapsed]='uiIsCollapseActive' (beanAction)="beanAction($event)" [bean]="item['beans'][0]"
       [beanGroup]="item"></bean-information>
     } @else {
+    @if (selectionMode) {
+    <div class="selection-row">
+      <ion-checkbox
+        [checked]="isSelected(item)"
+        (ionChange)="toggleSelected(item, $event.detail.checked)"
+      ></ion-checkbox>
+    </div>
+    }
     <bean-information [id]="'bean-' + item['config'].uuid" [collapsed]='uiIsCollapseActive' (beanAction)="beanAction($event)" [bean]="item"></bean-information>
     }
     }
@@ -129,12 +215,28 @@
   </div>
   }
   <ag-virtual-scroll #archivedScroll [items]="finishedBeans" [height]="'100vh'"
-    [min-row-height]="uiIsCollapseActive?60:210">
+    [min-row-height]="getRowHeight()">
     @for (item of archivedScroll.items; track item) {
     @if (item['beans']) {
+    @if (selectionMode) {
+    <div class="selection-row">
+      <ion-checkbox
+        [checked]="isSelected(item)"
+        (ionChange)="toggleSelected(item, $event.detail.checked)"
+      ></ion-checkbox>
+    </div>
+    }
     <bean-information [id]="'bean-group-' + item['frozenGroupId']" [collapsed]='uiIsCollapseActive' (beanAction)="beanAction($event)" [bean]="item['beans'][0]"
       [beanGroup]="item"></bean-information>
     } @else {
+    @if (selectionMode) {
+    <div class="selection-row">
+      <ion-checkbox
+        [checked]="isSelected(item)"
+        (ionChange)="toggleSelected(item, $event.detail.checked)"
+      ></ion-checkbox>
+    </div>
+    }
     <bean-information [id]="'bean-' + item['config'].uuid" [collapsed]='uiIsCollapseActive' (beanAction)="beanAction($event)" [bean]="item"></bean-information>
     }
     }

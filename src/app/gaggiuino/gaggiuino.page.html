@@ -114,6 +114,12 @@
             <div class="status-line">
               <ion-text>{{ autoSyncStatusMessage }}</ion-text>
             </div>
+            <div class="actions">
+              <ion-button fill="outline" size="small" (click)="syncNow()" [disabled]="syncInProgress">
+                <ion-icon name="sync-outline" slot="start" />
+                Sync now
+              </ion-button>
+            </div>
             @if (autoSyncStatus) {
             <ion-list lines="none">
               <ion-item>
@@ -133,10 +139,24 @@
                 <ion-note slot="end">{{ autoSyncStatus.lastSyncedShotId }}</ion-note>
               </ion-item>
               <ion-item>
+                <ion-label>Last checked</ion-label>
+                <ion-note slot="end">{{ formatIsoDate(autoSyncStatus.lastCheckedAt) }}</ion-note>
+              </ion-item>
+              <ion-item>
+                <ion-label>Consecutive failures</ion-label>
+                <ion-note slot="end">{{ autoSyncStatus.consecutiveFailures || 0 }}</ion-note>
+              </ion-item>
+              <ion-item>
                 <ion-label>Last sync result</ion-label>
                 <ion-note slot="end">
                   +{{ autoSyncStatus.lastSyncSummary?.added || 0 }} / ~{{ autoSyncStatus.lastSyncSummary?.updated || 0 }}
                 </ion-note>
+              </ion-item>
+              <ion-item>
+                <ion-label>
+                  <h2>Health reason</h2>
+                  <p>{{ autoSyncHealthReason() }}</p>
+                </ion-label>
               </ion-item>
               @if (autoSyncStatus.lastError) {
               <ion-item>

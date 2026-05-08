@@ -122,6 +122,7 @@ export class GaggiuinoPage implements OnInit, OnDestroy {
   public status: unknown;
   public statusMessage = 'Not checked';
   public syncMessage = '';
+  public syncInProgress = false;
   public autoSyncStatus: GaggiuinoAutoSyncStatus | null = null;
   public autoSyncStatusMessage = '';
   public loading = false;
@@ -281,30 +282,85 @@ export class GaggiuinoPage implements OnInit, OnDestroy {
     }
   }
 
+  public async syncNow() {
+    this.syncInProgress = true;
+    this.syncMessage = 'Running auto-sync now...';
+    try {
+      const result = await this.api<{
+        result: {
+          imported: number;
+          latestShotId: number;
+          lastSyncedShotId: number;
+          sync: { added: number; updated?: number; total: number };
+        };
+        status: GaggiuinoAutoSyncStatus;
+      }>('/api/gaggiuino/autosync-sync-now', { method: 'POST' });
+      this.autoSyncStatus = result.status;
+      this.autoSyncStatusMessage = this.formatAutoSyncStatus(result.status);
+      this.syncMessage = `Sync now complete. Imported ${result.result.imported}; +${result.result.sync.added} / ~${result.result.sync.updated || 0}.`;
+      await this.refreshAppStorage();
+      await this.load();
+    } catch (error) {
+      this.syncMessage = this.errorMessage(error);
+    } finally {
+      this.syncInProgress = false;
+    }
+  }
+
+  public autoSyncHealthReason(): string {
+    const error = (this.autoSyncStatus?.lastError || '').toLowerCase();
+    if (!error) {
+      return 'No active errors.';
+    }
+    if (error.includes('timed out') || error.includes('timeout')) {
+      return 'Timeout: verify Gaggiuino host/IP and network reachability.';
+    }
+    if (error.includes('not found') || error.includes('enotfound')) {
+      return 'Host resolution failed: check mDNS or use fixed LAN IP.';
+    }
+    if (error.includes('401') || error.includes('403')) {
+      return 'Authorization error: verify Gaggiuino API auth settings.';
+    }
+    if (error.includes('parse') || error.includes('json')) {
+      return 'Parser error: upstream payload shape changed or malformed.';
+    }
+    return 'General connectivity or upstream error. Check logs.';
+  }
+
   private async api<T>(
     path: string,
     options: RequestInit = {},
   ): Promise<T> {
     const runtimeConfig = (window as unknown as {
-      __beanconquerorConfig?: { apiBaseUrl?: string; apiAuthToken?: string };
+      __beanconquerorConfig?: { apiBaseUrl?: string };
     }).__beanconquerorConfig;
     const apiBaseUrl = runtimeConfig?.apiBaseUrl || '/api';
     const normalizedPath = path.startsWith('/api') ? path.slice(4) : path;
     const headers = new Headers(options.headers);
     headers.set('Content-Type', 'application/json');
 
-    if (runtimeConfig?.apiAuthToken) {
-      headers.set('X-Beanconqueror-Api-Token', runtimeConfig.apiAuthToken);
-    }
-
     const response = await fetch(`${apiBaseUrl}${normalizedPath}`, {
       ...options,
       headers,
+      credentials: 'include',
     });
-    const body = await response.json().catch(() => ({}));
+    let body = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      const retry = await fetch(`${apiBaseUrl}${normalizedPath}`, {
+        ...options,
+        headers,
+        credentials: 'include',
+      });
+      body = await retry.json().catch(() => ({}));
+      if (!retry.ok) {
+        throw new Error(body?.message || body?.code || retry.statusText);
+      }
+      return body;
+    }
 
     if (!response.ok) {
-      throw new Error(body?.message || body?.error || response.statusText);
+      throw new Error(body?.message || body?.code || response.statusText);
     }
 
     return body;

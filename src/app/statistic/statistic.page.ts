@@ -42,6 +42,7 @@ import { UIBrewStorage } from '../../services/uiBrewStorage';
 import { UIHelper } from '../../services/uiHelper';
 import { UIMillStorage } from '../../services/uiMillStorage';
 import { UIPreparationStorage } from '../../services/uiPreparationStorage';
+import { UISettingsStorage } from '../../services/uiSettingsStorage';
 import { UIStatistic } from '../../services/uiStatistic';
 
 @Component({
@@ -80,6 +81,7 @@ export class StatisticPage implements OnInit {
   private readonly uiPreparationStorage = inject(UIPreparationStorage);
   private readonly uiHelper = inject(UIHelper);
   private readonly uiMillStorage = inject(UIMillStorage);
+  private readonly uiSettingsStorage = inject(UISettingsStorage);
   private translate = inject(TranslateService);
   private readonly currencyService = inject(CurrencyService);
 
@@ -112,6 +114,10 @@ export class StatisticPage implements OnInit {
   public aiLoading = false;
   public aiRunning = false;
   public aiError = '';
+  public analyticsPreset: 'all' | 'dialin' | 'newbag' | 'gaggiuino' = 'all';
+  public avgExtractionSeconds = 0;
+  public extractionConsistencyScore = 0;
+  public avgRatio = 0;
 
   public getCurrencySymbol() {
     return this.currencyService.getActualCurrencySymbol();
@@ -368,7 +374,14 @@ export class StatisticPage implements OnInit {
     }, 250);
   }
 
-  public ngOnInit() {}
+  public ngOnInit() {
+    this.computeBrewKpis();
+  }
+
+  public onAnalyticsPresetChanged() {
+    this.loadBrewCharts();
+    this.computeBrewKpis();
+  }
 
   public async loadAiAnalysis() {
     this.aiLoading = true;
@@ -406,6 +419,31 @@ export class StatisticPage implements OnInit {
     }
   }
 
+  public async applyRecommendationToNextBrew(recommendation: any) {
+    const settings = this.uiSettingsStorage.getSettings();
+    const action = String(recommendation?.action || '').toLowerCase();
+    settings.repeat_coffee_parameters.repeat_coffee_active = true;
+
+    if (action.includes('dose') || action.includes('grind')) {
+      settings.repeat_coffee_parameters.grind_weight = true;
+      settings.repeat_coffee_parameters.bean_weight_in = true;
+    }
+    if (action.includes('yield') || action.includes('ratio')) {
+      settings.repeat_coffee_parameters.brew_beverage_quantity = true;
+      settings.repeat_coffee_parameters.brew_quantity = true;
+    }
+    if (action.includes('temperature') || action.includes('temp')) {
+      settings.repeat_coffee_parameters.brew_temperature = true;
+    }
+    if (action.includes('time') || action.includes('extraction')) {
+      settings.repeat_coffee_parameters.brew_time = true;
+      settings.repeat_coffee_parameters.coffee_first_drip_time = true;
+    }
+
+    await this.uiSettingsStorage.saveSettings(settings);
+    this.aiError = 'Recommendation applied to next brew repeat parameters.';
+  }
+
   public aiEnabledAndConfigured(): boolean {
     return !!this.aiStatus?.enabled && !!this.aiStatus?.providerReady;
   }
@@ -438,25 +476,35 @@ export class StatisticPage implements OnInit {
 
   private async api<T>(path: string, options: RequestInit = {}): Promise<T> {
     const runtimeConfig = (window as unknown as {
-      __beanconquerorConfig?: { apiBaseUrl?: string; apiAuthToken?: string };
+      __beanconquerorConfig?: { apiBaseUrl?: string };
     }).__beanconquerorConfig;
     const apiBaseUrl = runtimeConfig?.apiBaseUrl || '/api';
     const normalizedPath = path.startsWith('/api') ? path.slice(4) : path;
     const headers = new Headers(options.headers);
     headers.set('Content-Type', 'application/json');
 
-    if (runtimeConfig?.apiAuthToken) {
-      headers.set('X-Beanconqueror-Api-Token', runtimeConfig.apiAuthToken);
-    }
-
     const response = await fetch(`${apiBaseUrl}${normalizedPath}`, {
       ...options,
       headers,
+      credentials: 'include',
     });
-    const body = await response.json().catch(() => ({}));
+    let body = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      const retry = await fetch(`${apiBaseUrl}${normalizedPath}`, {
+        ...options,
+        headers,
+        credentials: 'include',
+      });
+      body = await retry.json().catch(() => ({}));
+      if (!retry.ok) {
+        throw new Error(body?.message || body?.code || retry.statusText);
+      }
+      return body as T;
+    }
 
     if (!response.ok) {
-      throw new Error(body?.message || body?.error || response.statusText);
+      throw new Error(body?.message || body?.code || response.statusText);
     }
 
     return body as T;
@@ -472,7 +520,7 @@ export class StatisticPage implements OnInit {
 
   private __getBrewsSortedForMonth(): Array<BrewView> {
     const brewViews: Array<BrewView> = [];
-    const brews: Array<Brew> = this.uiBrewStorage.getAllEntries();
+    const brews: Array<Brew> = this.getFilteredBrewsByPreset();
     // sort latest to top.
     const brewsCopy: Array<Brew> = [...brews];
 
@@ -511,7 +559,7 @@ export class StatisticPage implements OnInit {
   }
   private __getBrewsSortedForDay(): Array<BrewView> {
     const brewViews: Array<BrewView> = [];
-    const brews: Array<Brew> = this.uiBrewStorage.getAllEntries();
+    const brews: Array<Brew> = this.getFilteredBrewsByPreset();
     // sort latest to top.
     const brewsCopy: Array<Brew> = [...brews];
 
@@ -554,7 +602,7 @@ export class StatisticPage implements OnInit {
   }
 
   private __loadGrinderUsageTimelineChart(): void {
-    const brewEntries: Array<Brew> = this.uiBrewStorage.getAllEntries();
+    const brewEntries: Array<Brew> = this.getFilteredBrewsByPreset();
     const brewView: Array<BrewView> = this.__getBrewsSortedForMonth();
     // Take the last 12 Months
     const lastBrewViews: Array<BrewView> = brewView.slice(-12);
@@ -630,7 +678,7 @@ export class StatisticPage implements OnInit {
     );
   }
   private __loadPreparationUsageTimelineChart(): void {
-    const brewEntries: Array<Brew> = this.uiBrewStorage.getAllEntries();
+    const brewEntries: Array<Brew> = this.getFilteredBrewsByPreset();
     const brewView: Array<BrewView> = this.__getBrewsSortedForMonth();
     // Take the last 12 Months
     const lastBrewViews: Array<BrewView> = brewView.slice(-12);
@@ -870,7 +918,7 @@ export class StatisticPage implements OnInit {
     } as any);
   }
   private __loadPreparationUsageChart(): void {
-    const brewView: Array<Brew> = this.uiBrewStorage.getAllEntries();
+    const brewView: Array<Brew> = this.getFilteredBrewsByPreset();
     const preparationMethodIds: Array<string> = Array.from(
       new Set(brewView.map((e: Brew) => e.method_of_preparation)),
     );
@@ -953,6 +1001,88 @@ export class StatisticPage implements OnInit {
         options: chartOptions,
       } as any,
     );
+  }
+
+  private getFilteredBrewsByPreset(): Array<Brew> {
+    const allBrews = this.uiBrewStorage.getAllEntries();
+    if (this.analyticsPreset === 'all') {
+      return allBrews;
+    }
+
+    if (this.analyticsPreset === 'gaggiuino') {
+      return allBrews.filter(
+        (brew) => String(brew.preparationDeviceBrew?.type || '').toUpperCase() === 'GAGGIUINO',
+      );
+    }
+
+    if (this.analyticsPreset === 'dialin') {
+      const now = Date.now() / 1000;
+      const sevenDaysAgo = now - 7 * 24 * 60 * 60;
+      return allBrews.filter((brew) => brew.config.unix_timestamp >= sevenDaysAgo);
+    }
+
+    if (this.analyticsPreset === 'newbag') {
+      const now = Date.now() / 1000;
+      const fourteenDaysAgo = now - 14 * 24 * 60 * 60;
+      return allBrews.filter((brew) => {
+        const bean = this.uiBeanStorage.getByUUID(brew.bean);
+        if (!bean || !bean.openDate) {
+          return false;
+        }
+        const openTs = Math.floor(new Date(bean.openDate).getTime() / 1000);
+        return openTs >= fourteenDaysAgo && openTs <= now;
+      });
+    }
+
+    return allBrews;
+  }
+
+  private computeBrewKpis() {
+    const brews = this.getFilteredBrewsByPreset();
+    if (!brews.length) {
+      this.avgExtractionSeconds = 0;
+      this.extractionConsistencyScore = 0;
+      this.avgRatio = 0;
+      return;
+    }
+
+    const extractionTimes = brews
+      .map((brew) => Number(brew.brew_time || 0))
+      .filter((value) => value > 0);
+    const ratios = brews
+      .map((brew) => {
+        const inValue = Number(brew.grind_weight || brew.bean_weight_in || 0);
+        const outValue = Number(brew.brew_beverage_quantity || brew.brew_quantity || 0);
+        if (inValue <= 0 || outValue <= 0) {
+          return 0;
+        }
+        return outValue / inValue;
+      })
+      .filter((value) => value > 0);
+
+    if (extractionTimes.length > 0) {
+      const avg =
+        extractionTimes.reduce((sum, value) => sum + value, 0) /
+        extractionTimes.length;
+      const variance =
+        extractionTimes.reduce((sum, value) => sum + (value - avg) ** 2, 0) /
+        extractionTimes.length;
+      const deviation = Math.sqrt(variance);
+      this.avgExtractionSeconds = avg;
+      this.extractionConsistencyScore = Math.max(
+        0,
+        Math.min(100, Math.round(100 - deviation * 6)),
+      );
+    } else {
+      this.avgExtractionSeconds = 0;
+      this.extractionConsistencyScore = 0;
+    }
+
+    if (ratios.length > 0) {
+      this.avgRatio = ratios.reduce((sum, value) => sum + value, 0) / ratios.length;
+    } else {
+      this.avgRatio = 0;
+    }
   }
 }
 

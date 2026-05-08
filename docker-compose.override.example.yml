@@ -1,0 +1,13 @@
+services:
+  beanconqueror:
+    environment:
+      NODE_ENV: development
+      API_CLIENT_TOKEN: dev-only-token
+      SESSION_SIGNING_SECRET: dev-only-session-secret
+      DB_PASSWORD: beanconqueror
+    ports:
+      - '8080:8080'
+
+  mariadb:
+    environment:
+      MARIADB_ROOT_PASSWORD: change-me

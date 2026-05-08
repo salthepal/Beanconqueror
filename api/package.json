@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test": "node --test ./test/*.test.js"
   },
   "dependencies": {
     "mysql2": "3.15.3"

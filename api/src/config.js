@@ -26,8 +26,18 @@ function readBoolean(name, fallback = false) {
 }
 
 const config = {
+  nodeEnv: process.env.NODE_ENV || 'production',
+  isDevelopment: (process.env.NODE_ENV || 'production') === 'development',
   port: readInteger('API_PORT', 3000),
-  apiAuthToken: process.env.API_AUTH_TOKEN || '',
+  clientApiToken: process.env.API_CLIENT_TOKEN || '',
+  sessionSigningSecret: process.env.SESSION_SIGNING_SECRET || '',
+  sessionTtlSeconds: readInteger('SESSION_TTL_SECONDS', 3600),
+  allowLegacyTokenAuth: readBoolean('ALLOW_LEGACY_TOKEN_AUTH', true),
+  requestBodyLimitBytes: readInteger('REQUEST_BODY_LIMIT_BYTES', 1024 * 1024),
+  rateLimitWindowMs: readInteger('RATE_LIMIT_WINDOW_MS', 60_000),
+  rateLimitMaxMutations: readInteger('RATE_LIMIT_MAX_MUTATIONS', 120),
+  metricsEnabled: readBoolean('METRICS_ENABLED', true),
+  idempotencyTtlSeconds: readInteger('IDEMPOTENCY_TTL_SECONDS', 3600),
   corsOrigins: readCsv('CORS_ORIGINS'),
   db: {
     host: process.env.DB_HOST || 'mariadb',

@@ -42,7 +42,8 @@ Services:
 ### Web/API
 
 - `API_BASE_URL` (default `/api`)
-- `API_AUTH_TOKEN` (optional; auto-generated if empty)
+- `API_CLIENT_TOKEN` (optional; for machine clients)
+- `SESSION_SIGNING_SECRET` (required in production)
 - `FEATURE_FLAGS_JSON` (optional JSON string)
 - `CORS_ORIGINS` (comma-separated origins; default same-origin only)
 
@@ -117,7 +118,7 @@ Run MariaDB container on same host/network, then map:
 
 Default web port mapping:
 
-- container `80`
+- container `8080`
 - host `8080`
 
 ## Persistence + backup
@@ -162,6 +163,7 @@ More details:
 
 - [docs/local-testing.md](docs/local-testing.md)
 - [docs/container-deployment.md](docs/container-deployment.md)
+- [.env.example](.env.example)
 
 ## Container publishing
 

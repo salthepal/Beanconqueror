@@ -35,6 +35,29 @@
       @case ('GENERAL') {
         <div>
           <ion-row>
+            <ion-col class="ion-text-center" size="4">
+              <ion-card class="small-card" style="height: 100%;">
+                <ion-card-header class="card-background" style="font-size: 1.2em;">{{avgExtractionSeconds | number : '.0-1'}}s
+                </ion-card-header>
+                <ion-card-content>Avg Extraction Time</ion-card-content>
+              </ion-card>
+            </ion-col>
+            <ion-col class="ion-text-center" size="4">
+              <ion-card class="small-card" style="height: 100%;">
+                <ion-card-header class="card-background" style="font-size: 1.2em;">{{extractionConsistencyScore}}%
+                </ion-card-header>
+                <ion-card-content>Consistency Score</ion-card-content>
+              </ion-card>
+            </ion-col>
+            <ion-col class="ion-text-center" size="4">
+              <ion-card class="small-card" style="height: 100%;">
+                <ion-card-header class="card-background" style="font-size: 1.2em;">1:{{avgRatio | number : '.0-2'}}
+                </ion-card-header>
+                <ion-card-content>Avg Ratio</ion-card-content>
+              </ion-card>
+            </ion-col>
+          </ion-row>
+          <ion-row>
             <ion-col class="ion-text-center" size="6">
               <ion-card class="small-card" style="height: 100%;">
                 <ion-card-header class="card-background" style="font-size: 1.2em;">{{uiStatistic.getMillsCount()}}
@@ -114,6 +137,14 @@
       }
       @case ('BREWS') {
         <div>
+          <ion-row class="ion-padding-horizontal ion-padding-bottom">
+            <ion-segment [(ngModel)]="analyticsPreset" (ionChange)="onAnalyticsPresetChanged()">
+              <ion-segment-button value="all"><ion-label>All</ion-label></ion-segment-button>
+              <ion-segment-button value="dialin"><ion-label>Dial-in</ion-label></ion-segment-button>
+              <ion-segment-button value="newbag"><ion-label>New Bag</ion-label></ion-segment-button>
+              <ion-segment-button value="gaggiuino"><ion-label>Gaggiuino</ion-label></ion-segment-button>
+            </ion-segment>
+          </ion-row>
           <ion-card>
             <ion-card-header class="card-background"
             style="font-size: 1.2em;text-align:center;">{{"PAGE_STATISTICS_BREW_PROCESSES" | translate}}</ion-card-header>
@@ -259,6 +290,9 @@
                         @if (recommendation.evidenceMetrics) {
                           <p>Evidence: {{ recommendation.evidenceMetrics | json }}</p>
                         }
+                        <ion-button size="small" fill="outline" (click)="applyRecommendationToNextBrew(recommendation)">
+                          Apply to next brew
+                        </ion-button>
                       </ion-label>
                     </ion-item>
                   }
