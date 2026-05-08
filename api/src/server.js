@@ -206,6 +206,10 @@ function getIdempotencyKey(request) {
 }
 
 function replayIdempotentResponse(response, cacheEntry) {
+  if (cacheEntry.status === 204) {
+    sendNoContent(response);
+    return;
+  }
   sendJson(response, cacheEntry.status, cacheEntry.payload);
 }
 
@@ -396,17 +400,6 @@ async function handleAiAnalysis(request, response, url) {
 }
 
 async function handleOperationalRoutes(request, response, url) {
-  if (url.pathname === '/health' && request.method === 'GET') {
-    sendJson(response, 200, { ok: true });
-    return true;
-  }
-
-  if (url.pathname === '/ready' && request.method === 'GET') {
-    const dbReady = await checkDatabaseReady().catch(() => false);
-    sendJson(response, dbReady ? 200 : 503, { ok: dbReady });
-    return true;
-  }
-
   if (url.pathname === '/api/status' && request.method === 'GET') {
     const dbReady = await checkDatabaseReady().catch(() => false);
     sendJson(response, 200, {

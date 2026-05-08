@@ -17,11 +17,9 @@ export class UIStorage {
 
   private _storage: Storage | null = null;
   private apiBaseUrl: string | null = null;
-  private apiAuthToken: string | null = null;
 
   public async init() {
     this.apiBaseUrl = this.getApiBaseUrl();
-    this.apiAuthToken = this.getApiAuthToken();
     if (this.apiBaseUrl) {
       this.uiLog.log(
         `UIStorage - Server API storage enabled: ${this.apiBaseUrl}`,
@@ -484,22 +482,6 @@ export class UIStorage {
     return rawBaseUrl.trim().replace(/\/+$/, '');
   }
 
-  private getApiAuthToken(): string | null {
-    const config = (window as any).__beanconquerorConfig;
-    const rawToken = config?.apiAuthToken;
-
-    if (
-      typeof rawToken !== 'string' ||
-      rawToken.trim() === '' ||
-      rawToken.includes('${') ||
-      rawToken.trimStart().startsWith('$')
-    ) {
-      return null;
-    }
-
-    return rawToken.trim();
-  }
-
   private async request(
     path: string,
     options: {
@@ -512,15 +494,19 @@ export class UIStorage {
     if (options.body) {
       headers['Content-Type'] = 'application/json';
     }
-    if (this.apiAuthToken) {
-      headers['X-Beanconqueror-Api-Token'] = this.apiAuthToken;
-    }
+    const doFetch = async () =>
+      await fetch(`${this.apiBaseUrl}${path}`, {
+        method: options.method,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        body: options.body,
+        credentials: 'include',
+      });
 
-    const response = await fetch(`${this.apiBaseUrl}${path}`, {
-      method: options.method,
-      headers: Object.keys(headers).length > 0 ? headers : undefined,
-      body: options.body,
-    });
+    let response = await doFetch();
+    if (response.status === 401) {
+      // First request can prime session cookie via Set-Cookie; retry once.
+      response = await doFetch();
+    }
 
     if (response.status === 404 && options.allowNotFound) {
       return null;

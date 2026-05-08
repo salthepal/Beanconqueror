@@ -9,14 +9,14 @@ services:
     environment:
       NODE_ENV: '${NODE_ENV:-production}'
       API_BASE_URL: '${API_BASE_URL:-/api}'
-      API_CLIENT_TOKEN: '${API_CLIENT_TOKEN}'
-      SESSION_SIGNING_SECRET: '${SESSION_SIGNING_SECRET}'
+      API_CLIENT_TOKEN: '${API_CLIENT_TOKEN:-dev-client-token}'
+      SESSION_SIGNING_SECRET: '${SESSION_SIGNING_SECRET:-dev-session-secret}'
       DB_HOST: '${DB_HOST:-mariadb}'
       DB_PORT: '${DB_PORT:-3306}'
-      DB_NAME: '${DB_NAME}'
-      DB_USER: '${DB_USER}'
-      DB_PASSWORD: '${DB_PASSWORD}'
-      MARIADB_ROOT_PASSWORD: '${MARIADB_ROOT_PASSWORD}'
+      DB_NAME: '${DB_NAME:-beanconqueror}'
+      DB_USER: '${DB_USER:-beanconqueror}'
+      DB_PASSWORD: '${DB_PASSWORD:-beanconqueror}'
+      MARIADB_ROOT_PASSWORD: '${MARIADB_ROOT_PASSWORD:-change-me}'
       GAGGIUINO_BASE_URL: '${GAGGIUINO_BASE_URL:-http://gaggiuino.local}'
       GAGGIUINO_AUTOSYNC_ENABLED: '${GAGGIUINO_AUTOSYNC_ENABLED:-true}'
       GAGGIUINO_AUTOSYNC_INTERVAL_MS: '${GAGGIUINO_AUTOSYNC_INTERVAL_MS:-30000}'
@@ -41,10 +41,10 @@ services:
   mariadb:
     image: mariadb:11
     environment:
-      MARIADB_DATABASE: '${DB_NAME}'
-      MARIADB_USER: '${DB_USER}'
-      MARIADB_PASSWORD: '${DB_PASSWORD}'
-      MARIADB_ROOT_PASSWORD: '${MARIADB_ROOT_PASSWORD}'
+      MARIADB_DATABASE: '${DB_NAME:-beanconqueror}'
+      MARIADB_USER: '${DB_USER:-beanconqueror}'
+      MARIADB_PASSWORD: '${DB_PASSWORD:-beanconqueror}'
+      MARIADB_ROOT_PASSWORD: '${MARIADB_ROOT_PASSWORD:-change-me}'
     volumes:
       - mariadb-data:/var/lib/mysql
     healthcheck:

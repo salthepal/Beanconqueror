@@ -28,7 +28,7 @@ docker run --rm -p 8080:8080 \
   -e DB_HOST=mariadb \
   -e DB_NAME=beanconqueror \
   -e DB_USER=beanconqueror \
-  -e DB_PASSWORD=change-me \
+  -e DB_PASSWORD=replace-with-strong-db-password \
   -e SESSION_SIGNING_SECRET=replace-me \
   -e API_BASE_URL=/api \
   ghcr.io/salthepal/beanconqueror:latest

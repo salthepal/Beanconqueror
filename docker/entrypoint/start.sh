@@ -8,17 +8,21 @@ if [ -z "${FEATURE_FLAGS_JSON:-}" ]; then
 fi
 export FEATURE_FLAGS_JSON
 
-if [ -z "${SESSION_SIGNING_SECRET:-}" ]; then
-  SESSION_SIGNING_SECRET="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
-fi
-export SESSION_SIGNING_SECRET
-
 if [ "${NODE_ENV:-production}" != "development" ]; then
+  if [ -z "${SESSION_SIGNING_SECRET:-}" ]; then
+    echo "SESSION_SIGNING_SECRET is required outside development."
+    exit 1
+  fi
   if [ "${DB_PASSWORD:-}" = "beanconqueror" ] || [ "${MARIADB_ROOT_PASSWORD:-}" = "change-me" ]; then
     echo "Refusing insecure default DB credentials outside development."
     exit 1
   fi
+else
+  if [ -z "${SESSION_SIGNING_SECRET:-}" ]; then
+    SESSION_SIGNING_SECRET="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+  fi
 fi
+export SESSION_SIGNING_SECRET
 
 envsubst < /tmp/env.template.js > /usr/share/nginx/html/assets/env.js
 

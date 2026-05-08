@@ -63,6 +63,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Write compose env
+        run: |
+          cat > .env <<'EOF'
+          NODE_ENV=development
+          HOST_PORT=8080
+          API_BASE_URL=/api
+          API_CLIENT_TOKEN=dev-client-token
+          SESSION_SIGNING_SECRET=dev-session-secret
+          DB_HOST=mariadb
+          DB_PORT=3306
+          DB_NAME=beanconqueror
+          DB_USER=beanconqueror
+          DB_PASSWORD=beanconqueror
+          MARIADB_ROOT_PASSWORD=change-me
+          GAGGIUINO_BASE_URL=http://gaggiuino.local
+          GAGGIUINO_AUTOSYNC_ENABLED=true
+          GAGGIUINO_AUTOSYNC_INTERVAL_MS=30000
+          GAGGIUINO_AUTOSYNC_MAX_BACKOFF_MS=300000
+          GAGGIUINO_AUTOSYNC_BATCH_SIZE=10
+          GAGGIUINO_AUTOSYNC_INITIAL_IMPORT_COUNT=6
+          FEATURE_FLAGS_JSON={"brewSharing":true,"betaFlow":false}
+          EOF
       - name: Start stack
         run: docker compose up -d --build
       - name: Wait for health

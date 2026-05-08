@@ -21,11 +21,10 @@ if [ "${mode}" = "--dry-run" ]; then
   exit 0
 fi
 
-gunzip -c "${backup_file}" | mysql \
+gunzip -c "${backup_file}" | MYSQL_PWD="${DB_PASSWORD:?missing DB_PASSWORD}" mysql \
   -h "${DB_HOST:?missing DB_HOST}" \
   -P "${DB_PORT:-3306}" \
   -u "${DB_USER:?missing DB_USER}" \
-  -p"${DB_PASSWORD:?missing DB_PASSWORD}" \
   "${DB_NAME:?missing DB_NAME}"
 
 echo "Restore completed from ${backup_file}"

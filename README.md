@@ -11,7 +11,7 @@ Beanconqueror packaged for local/self-hosted use with:
 
 Primary target: Unraid + local network espresso setup.
 
-This distribution is a vibe-coded app: rapidly iterated feature work with practical production hardening layered in.
+Disclaimer: this distribution is a vibe-coded app.
 
 ## What this build changes
 

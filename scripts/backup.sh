@@ -7,11 +7,10 @@ outfile="${backup_dir}/beanconqueror-db-${DB_NAME:-beanconqueror}-${timestamp}.s
 checksum_file="${outfile}.sha256"
 
 mkdir -p "${backup_dir}"
-mysqldump \
+MYSQL_PWD="${DB_PASSWORD:?missing DB_PASSWORD}" mysqldump \
   -h "${DB_HOST:?missing DB_HOST}" \
   -P "${DB_PORT:-3306}" \
   -u "${DB_USER:?missing DB_USER}" \
-  -p"${DB_PASSWORD:?missing DB_PASSWORD}" \
   "${DB_NAME:?missing DB_NAME}" | gzip > "${outfile}"
 
 if command -v sha256sum >/dev/null 2>&1; then
