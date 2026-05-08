@@ -40,7 +40,17 @@ terminate() {
 trap 'terminate; exit 143' TERM INT
 
 set +e
-wait -n "$api_pid" "$nginx_pid"
-status="$?"
+while kill -0 "$api_pid" 2>/dev/null && kill -0 "$nginx_pid" 2>/dev/null; do
+  sleep 1
+done
+
+if ! kill -0 "$api_pid" 2>/dev/null; then
+  wait "$api_pid"
+  status="$?"
+else
+  wait "$nginx_pid"
+  status="$?"
+fi
+
 terminate
 exit "$status"

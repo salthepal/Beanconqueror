@@ -559,11 +559,6 @@ function getFirstDripSeconds(shot) {
   return 0;
 }
 
-  }
-
-  return 0;
-}
-
 function formatGraphTimestamp(seconds) {
   const date = new Date(Math.max(0, seconds) * 1000);
   return date.toISOString().substring(11, 23);
