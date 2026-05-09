@@ -59,8 +59,10 @@ function readJson(request, maxBytes) {
 function parseCookies(request) {
   const header = request.headers.cookie || '';
   if (!header) {
-    return {};
+    return Object.create(null);
   }
+
+  const blockedKeys = new Set(['__proto__', 'constructor', 'prototype']);
 
   return header.split(';').reduce((acc, pair) => {
     const index = pair.indexOf('=');
@@ -69,6 +71,10 @@ function parseCookies(request) {
     }
 
     const key = pair.substring(0, index).trim();
+    if (blockedKeys.has(key)) {
+      return acc;
+    }
+
     const value = pair.substring(index + 1).trim();
     try {
       acc[key] = decodeURIComponent(value);
@@ -76,7 +82,7 @@ function parseCookies(request) {
       acc[key] = value;
     }
     return acc;
-  }, {});
+  }, Object.create(null));
 }
 
 function applyCors(request, response, allowedOrigins) {
