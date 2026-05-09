@@ -10,18 +10,19 @@ function sign(data, secret) {
   return crypto.createHmac('sha256', secret).update(data).digest('base64url');
 }
 
-function issueSessionToken(secret, ttlSeconds) {
+function issueSessionToken(secret, ttlSeconds, clientFingerprint = '') {
   const payload = {
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + ttlSeconds,
     nonce: crypto.randomBytes(12).toString('hex'),
+    fp: clientFingerprint || undefined,
   };
   const encodedPayload = base64url(JSON.stringify(payload));
   const signature = sign(encodedPayload, secret);
   return `${encodedPayload}.${signature}`;
 }
 
-function verifySessionToken(token, secret) {
+function verifySessionToken(token, secret, clientFingerprint = '') {
   if (!token || typeof token !== 'string') {
     return false;
   }
@@ -48,6 +49,9 @@ function verifySessionToken(token, secret) {
   }
 
   if (!payload.exp || Number(payload.exp) < Math.floor(Date.now() / 1000)) {
+    return false;
+  }
+  if (payload.fp && payload.fp !== clientFingerprint) {
     return false;
   }
 

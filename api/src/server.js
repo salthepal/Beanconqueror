@@ -16,7 +16,7 @@ const {
   verifySessionToken,
 } = require('./auth');
 const { config } = require('./config');
-const { checkDatabaseReady, migrate } = require('./db');
+const { checkDatabaseReady, getPool, migrate } = require('./db');
 const {
   GaggiuinoConnectionError,
   getAutoSyncState,
@@ -41,7 +41,7 @@ const {
   sendJson,
   sendNoContent,
 } = require('./http');
-const { RateLimiter } = require('./rate-limit');
+const { DbRateLimiter, RateLimiter } = require('./rate-limit');
 const {
   getIdempotencyEntry,
   pruneIdempotencyEntries,
@@ -65,6 +65,9 @@ const {
 const metrics = {
   requestCount: 0,
   errorCount: 0,
+  unauthorizedCount: 0,
+  rateLimitedCount: 0,
+  idempotencyReplayCount: 0,
   syncSuccessCount: 0,
   syncFailureCount: 0,
   aiRunSuccessCount: 0,
@@ -77,10 +80,16 @@ const metrics = {
   },
 };
 
-const limiter = new RateLimiter(
-  config.rateLimitWindowMs,
-  config.rateLimitMaxMutations,
-);
+const limiter = config.rateLimitBackend === 'db'
+  ? new DbRateLimiter(
+    config.rateLimitWindowMs,
+    config.rateLimitMaxMutations,
+    getPool,
+  )
+  : new RateLimiter(config.rateLimitWindowMs, config.rateLimitMaxMutations);
+let isReady = false;
+let isShuttingDown = false;
+let serverRef = null;
 
 function log(level, message, data = {}) {
   const payload = {
@@ -105,21 +114,37 @@ function isMutation(method) {
   return ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method);
 }
 
-function isAuthorized(request) {
+function getClientFingerprint(request) {
+  const forwarded = String(request.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
+  const clientIp = forwarded || request.socket.remoteAddress || '';
+  const source = `${request.headers['user-agent'] || ''}|${clientIp}`;
+  return crypto.createHash('sha256').update(source).digest('hex');
+}
+
+function getAuthMode(request) {
   const appearsBrowser = Boolean(request.headers.origin);
   const sessionToken = getCookie(request, SESSION_COOKIE_NAME);
+  const clientFingerprint = config.sessionBindClientFingerprint
+    ? getClientFingerprint(request)
+    : '';
 
-  if (config.sessionSigningSecret && verifySessionToken(sessionToken, config.sessionSigningSecret)) {
-    return true;
+  if (config.sessionSigningSecret && verifySessionToken(sessionToken, config.sessionSigningSecret, clientFingerprint)) {
+    return 'session';
+  }
+  if (config.sessionPreviousSigningSecret
+    && verifySessionToken(sessionToken, config.sessionPreviousSigningSecret, clientFingerprint)) {
+    return 'session-rotated';
   }
 
   if (!config.clientApiToken) {
-    return false;
+    return null;
   }
 
   const headerToken = request.headers['x-beanconqueror-client-token'];
   if (headerToken === config.clientApiToken) {
-    return true;
+    return 'client-token';
   }
 
   const legacyHeaderToken = request.headers['x-beanconqueror-api-token'];
@@ -128,8 +153,10 @@ function isAuthorized(request) {
       log('warn', 'legacy_auth_rejected_for_browser');
       return false;
     }
-    log('warn', 'legacy_api_token_header_used');
-    return true;
+    log('warn', 'legacy_api_token_header_used', {
+      removalDate: config.legacyTokenAuthRemovalDate,
+    });
+    return 'legacy-header-token';
   }
 
   const authorization = request.headers.authorization || '';
@@ -138,22 +165,31 @@ function isAuthorized(request) {
       log('warn', 'legacy_bearer_auth_rejected_for_browser');
       return false;
     }
-    log('warn', 'legacy_bearer_auth_used');
-    return true;
+    log('warn', 'legacy_bearer_auth_used', {
+      removalDate: config.legacyTokenAuthRemovalDate,
+    });
+    return 'legacy-bearer';
   }
-  return false;
+  return null;
 }
 
-function maybeIssueSessionCookie(request, response) {
+function maybeIssueSessionCookie(request, response, authMode) {
   if (!config.sessionSigningSecret) {
     return;
   }
 
-  if (getCookie(request, SESSION_COOKIE_NAME)) {
+  if (authMode !== 'session-rotated' && getCookie(request, SESSION_COOKIE_NAME)) {
     return;
   }
 
-  const token = issueSessionToken(config.sessionSigningSecret, config.sessionTtlSeconds);
+  const clientFingerprint = config.sessionBindClientFingerprint
+    ? getClientFingerprint(request)
+    : '';
+  const token = issueSessionToken(
+    config.sessionSigningSecret,
+    config.sessionTtlSeconds,
+    clientFingerprint,
+  );
   response.setHeader('Set-Cookie', buildSessionCookie(token, config.sessionTtlSeconds));
 }
 
@@ -179,14 +215,15 @@ function getRateLimitKey(request) {
   return `ip:${request.socket.remoteAddress || 'unknown'}`;
 }
 
-function enforceRateLimit(request) {
+async function enforceRateLimit(request) {
   if (!isMutation(request.method)) {
     return;
   }
 
   const key = getRateLimitKey(request);
-  const result = limiter.hit(key);
+  const result = await limiter.hit(key);
   if (!result.allowed) {
+    metrics.rateLimitedCount += 1;
     throw new HttpError(429, 'rate_limited', 'Too many requests');
   }
 }
@@ -202,6 +239,14 @@ function getIdempotencyKey(request) {
   return `${request.method}:${request.url}:${raw}`;
 }
 
+function getIdempotencyRequestHash(request) {
+  const raw = request.headers['x-idempotency-body-sha256'];
+  if (!raw || typeof raw !== 'string') {
+    return '';
+  }
+  return raw.trim().toLowerCase();
+}
+
 function replayIdempotentResponse(response, cacheEntry) {
   if (cacheEntry.status === 204) {
     sendNoContent(response);
@@ -210,16 +255,23 @@ function replayIdempotentResponse(response, cacheEntry) {
   sendJson(response, cacheEntry.status, cacheEntry.payload);
 }
 
-async function saveIdempotentResponse(idempotencyKey, status, payload) {
+async function saveIdempotentResponse(idempotencyKey, requestHash, status, payload) {
   if (!idempotencyKey) {
     return;
   }
   await saveIdempotencyEntry(
     idempotencyKey,
+    requestHash,
     status,
     payload,
     config.idempotencyTtlSeconds,
   );
+}
+
+async function readValidatedJson(request, validator) {
+  const body = await readJson(request, config.requestBodyLimitBytes);
+  validator(body);
+  return body;
 }
 
 async function handleStorage(request, response, url) {
@@ -228,8 +280,7 @@ async function handleStorage(request, response, url) {
   }
 
   if (url.pathname === '/api/storage/import' && request.method === 'POST') {
-    const body = await readJson(request, config.requestBodyLimitBytes);
-    validateStorageImport(body);
+    const body = await readValidatedJson(request, validateStorageImport);
     await importStorage(body);
     return { handled: true, payload: {}, status: 204 };
   }
@@ -254,8 +305,7 @@ async function handleStorage(request, response, url) {
   }
 
   if (request.method === 'PUT') {
-    const body = await readJson(request, config.requestBodyLimitBytes);
-    validateStoragePut(body);
+    const body = await readValidatedJson(request, validateStoragePut);
     await setStorageValue(
       key,
       Object.prototype.hasOwnProperty.call(body, 'value') ? body.value : body,
@@ -296,8 +346,7 @@ async function handleGaggiuino(request, response, url) {
   }
 
   if (url.pathname === '/api/gaggiuino/config' && request.method === 'PUT') {
-    const body = await readJson(request, config.requestBodyLimitBytes);
-    validateGaggiuinoConfig(body);
+    const body = await readValidatedJson(request, validateGaggiuinoConfig);
     sendJson(response, 200, await updateGaggiuinoSettings(body));
     return true;
   }
@@ -322,8 +371,7 @@ async function handleGaggiuino(request, response, url) {
   }
 
   if (url.pathname === '/api/gaggiuino/shots/import-latest' && request.method === 'POST') {
-    const body = await readJson(request, config.requestBodyLimitBytes);
-    validateImportLatestRequest(body);
+    const body = await readValidatedJson(request, validateImportLatestRequest);
     sendJson(response, 200, await importLatestShots(body.count, {
       syncToBrews: body.syncToBrews !== false,
     }));
@@ -387,8 +435,7 @@ async function handleAiAnalysis(request, response, url) {
   }
 
   if (url.pathname === '/api/ai-analysis/config' && request.method === 'PUT') {
-    const body = await readJson(request, config.requestBodyLimitBytes);
-    validateAiAnalysisConfig(body);
+    const body = await readValidatedJson(request, validateAiAnalysisConfig);
     sendJson(response, 200, await setAiAnalysisConfig(body));
     return true;
   }
@@ -404,6 +451,7 @@ async function handleOperationalRoutes(request, response, url) {
       autoSync: await getAutoSyncState(),
       aiAnalysis: await getAiAnalysisStatus(),
       metrics,
+      ready: isReady && !isShuttingDown,
     });
     return true;
   }
@@ -424,7 +472,8 @@ async function handlePublicOperationalRoutes(request, response, url) {
 
   if (url.pathname === '/ready' && request.method === 'GET') {
     const dbReady = await checkDatabaseReady().catch(() => false);
-    sendJson(response, dbReady ? 200 : 503, { ok: dbReady });
+    const ready = dbReady && isReady && !isShuttingDown;
+    sendJson(response, ready ? 200 : 503, { ok: ready, dbReady, isShuttingDown });
     return true;
   }
 
@@ -435,6 +484,8 @@ async function route(request, response) {
   metrics.requestCount += 1;
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
+  let authMode = 'none';
+  let idempotencyHit = false;
   response.setHeader('X-Request-Id', requestId);
   applyCors(request, response, config.corsOrigins);
 
@@ -449,19 +500,31 @@ async function route(request, response) {
       return;
     }
 
-    if (!isAuthorized(request)) {
+    authMode = getAuthMode(request) || 'none';
+    if (authMode === 'none') {
+      metrics.unauthorizedCount += 1;
       throw new HttpError(401, 'unauthorized', 'Authentication required');
     }
-    maybeIssueSessionCookie(request, response);
+    maybeIssueSessionCookie(request, response, authMode);
 
     if (await handleOperationalRoutes(request, response, url)) {
       return;
     }
 
-    enforceRateLimit(request);
+    await enforceRateLimit(request);
     const idempotencyKey = getIdempotencyKey(request);
+    const idempotencyRequestHash = getIdempotencyRequestHash(request);
     const cached = idempotencyKey ? await getIdempotencyEntry(idempotencyKey) : null;
     if (cached) {
+      if (idempotencyRequestHash && cached.requestHash && cached.requestHash !== idempotencyRequestHash) {
+        throw new HttpError(
+          409,
+          'idempotency_conflict',
+          'Idempotency key reused with different payload hash',
+        );
+      }
+      metrics.idempotencyReplayCount += 1;
+      idempotencyHit = true;
       replayIdempotentResponse(response, cached);
       return;
     }
@@ -475,6 +538,7 @@ async function route(request, response) {
       }
       await saveIdempotentResponse(
         idempotencyKey,
+        idempotencyRequestHash,
         storageResult.status,
         storageResult.payload,
       );
@@ -526,6 +590,8 @@ async function route(request, response) {
       path: request.url,
       status: response.statusCode,
       latencyMs,
+      authMode,
+      idempotencyHit,
     });
   }
 }
@@ -542,6 +608,8 @@ function clampInterval(value, fallback) {
 function startGaggiuinoAutoSyncMonitor() {
   let timer = null;
   let running = false;
+  let breakerState = 'closed';
+  let consecutiveFailures = 0;
 
   const schedule = (delayMs) => {
     if (timer) clearTimeout(timer);
@@ -551,6 +619,8 @@ function startGaggiuinoAutoSyncMonitor() {
       enabled: true,
       running,
       nextPollInMs: delay,
+      breakerState,
+      consecutiveFailures,
     }).catch((err) => console.error('Failed to update auto-sync state:', err));
   };
 
@@ -578,9 +648,25 @@ function startGaggiuinoAutoSyncMonitor() {
           running: false,
           consecutiveFailures: 0,
           lastError: '',
+          breakerState: 'closed',
           nextPollInMs: config.gaggiuino.autoSyncIntervalMs,
         }).catch((err) => console.error('Failed to update auto-sync state:', err));
+        breakerState = 'closed';
+        consecutiveFailures = 0;
         nextDelay = config.gaggiuino.autoSyncIntervalMs;
+        return;
+      }
+
+      if (breakerState === 'open') {
+        breakerState = 'half-open';
+        await updateAutoSyncState({
+          enabled: true,
+          running: false,
+          breakerState,
+          consecutiveFailures,
+          nextPollInMs: config.gaggiuino.autoSyncMaxBackoffMs,
+        }).catch((err) => console.error('Failed to update auto-sync state:', err));
+        nextDelay = config.gaggiuino.autoSyncMaxBackoffMs;
         return;
       }
 
@@ -589,6 +675,8 @@ function startGaggiuinoAutoSyncMonitor() {
         initialImportCount: config.gaggiuino.autoSyncInitialImportCount,
       });
       metrics.syncSuccessCount += 1;
+      consecutiveFailures = 0;
+      breakerState = breakerState === 'open' ? 'half-open' : 'closed';
       await updateAutoSyncState({
         enabled: true,
         online: true,
@@ -597,15 +685,21 @@ function startGaggiuinoAutoSyncMonitor() {
         lastError: '',
         lastImportedCount: result.imported.length,
         lastSyncSummary: result.sync,
+        breakerState,
+        consecutiveFailures,
       }).catch((err) => console.error('Failed to update auto-sync state:', err));
       nextDelay = config.gaggiuino.autoSyncIntervalMs;
     } catch (error) {
       metrics.syncFailureCount += 1;
+      consecutiveFailures += 1;
+      breakerState = consecutiveFailures >= 3 ? 'open' : 'closed';
       await updateAutoSyncState({
         enabled: true,
         online: false,
         running: false,
         lastError: error?.message || String(error),
+        breakerState,
+        consecutiveFailures,
       }).catch((err) => console.error('Failed to update auto-sync state:', err));
       nextDelay = config.gaggiuino.autoSyncMaxBackoffMs;
     } finally {
@@ -672,6 +766,7 @@ function startAiAnalysisMonitor() {
 
 async function start() {
   await migrate();
+  isReady = true;
   const settings = await getGaggiuinoSettings();
   await updateAutoSyncState({ enabled: settings.autoSyncEnabled, running: false }).catch(
     (err) => console.error('Failed to initialize auto-sync state:', err),
@@ -691,6 +786,7 @@ async function start() {
       );
     });
   });
+  serverRef = server;
 
   server.listen(config.port, () => {
     log('info', 'server_started', { port: config.port, env: config.nodeEnv });
@@ -701,6 +797,29 @@ async function start() {
     }, 15 * 60 * 1000);
   });
 }
+
+function shutdown() {
+  if (isShuttingDown) {
+    return;
+  }
+  isShuttingDown = true;
+  const timeout = setTimeout(() => {
+    process.exit(0);
+  }, config.gracefulShutdownTimeoutMs);
+
+  if (serverRef) {
+    serverRef.close(() => {
+      clearTimeout(timeout);
+      process.exit(0);
+    });
+    return;
+  }
+  clearTimeout(timeout);
+  process.exit(0);
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 start().catch((error) => {
   log('error', 'server_start_failed', { message: error.message });

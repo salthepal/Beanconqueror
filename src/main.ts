@@ -1,4 +1,5 @@
 import {
+  HTTP_INTERCEPTORS,
   provideHttpClient,
   withInterceptorsFromDi,
 } from '@angular/common/http';
@@ -27,6 +28,7 @@ import { routes } from './app/app.routes';
 import { providePlatformPorts } from './app/platform/providers/platform.providers';
 import { BeanconquerorErrorHandler } from './classes/angular/BeanconquerorErrorHandler';
 import { environment } from './environments/environment';
+import { ApiErrorInterceptor } from './services/api-error.interceptor';
 
 function getStorageDriverOrder(): string[] {
   return [Drivers.IndexedDB, Drivers.LocalStorage];
@@ -79,6 +81,7 @@ bootstrapApplication(AppComponent, {
     ),
     { provide: RouteReuseStrategy, useClass: IonicRouteStrategy },
     { provide: ErrorHandler, useClass: BeanconquerorErrorHandler },
+    { provide: HTTP_INTERCEPTORS, useClass: ApiErrorInterceptor, multi: true },
     provideHttpClient(withInterceptorsFromDi()),
     provideTranslateService({
       loader: provideTranslateHttpLoader({

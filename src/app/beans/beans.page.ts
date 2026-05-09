@@ -60,6 +60,7 @@ import { UIFileHelper } from '../../services/uiFileHelper';
 import { UIImage } from '../../services/uiImage';
 import { UILog } from '../../services/uiLog';
 import { UISettingsStorage } from '../../services/uiSettingsStorage';
+import { ApiRuntimeStateService } from '../../services/api-runtime-state.service';
 import { BeanImportPopoverComponent } from './bean-import-popover/bean-import-popover.component';
 import { BeanPopoverAddComponent } from './bean-popover-add/bean-popover-add.component';
 import { BeansAddComponent } from './beans-add/beans-add.component';
@@ -110,6 +111,7 @@ export class BeansPage implements OnDestroy {
   private readonly uiAlert = inject(UIAlert);
   private readonly uiFileHelper = inject(UIFileHelper);
   private readonly translate = inject(TranslateService);
+  private readonly apiRuntimeState = inject(ApiRuntimeStateService);
 
   public beans: Bean[] = [];
 
@@ -173,6 +175,9 @@ export class BeansPage implements OnDestroy {
   public uiSearchText = '';
   public quickOpenFilter: 'all' | 'favorites' | 'recent' | 'low' = 'all';
   public loadingBeans = false;
+  public get staleDataWarning(): boolean {
+    return this.apiRuntimeState.isStaleSnapshot();
+  }
   public compactDensity: 'comfortable' | 'compact' | 'ultra' = 'compact';
   public lowBeanThreshold = 250;
   public selectionMode = false;

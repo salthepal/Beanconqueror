@@ -104,7 +104,7 @@ function applyCors(request, response, allowedOrigins) {
   );
   response.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-Beanconqueror-Client-Token, Idempotency-Key',
+    'Content-Type, Authorization, X-Beanconqueror-Client-Token, Idempotency-Key, X-Idempotency-Body-Sha256',
   );
 }
 

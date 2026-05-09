@@ -44,6 +44,8 @@ import { UIMillStorage } from '../../services/uiMillStorage';
 import { UIPreparationStorage } from '../../services/uiPreparationStorage';
 import { UISettingsStorage } from '../../services/uiSettingsStorage';
 import { UIStatistic } from '../../services/uiStatistic';
+import { ApiRuntimeStateService } from '../../services/api-runtime-state.service';
+import { UIToast } from '../../services/uiToast';
 
 @Component({
   selector: 'statistic',
@@ -84,6 +86,8 @@ export class StatisticPage implements OnInit {
   private readonly uiSettingsStorage = inject(UISettingsStorage);
   private translate = inject(TranslateService);
   private readonly currencyService = inject(CurrencyService);
+  private readonly apiRuntimeState = inject(ApiRuntimeStateService);
+  private readonly uiToast = inject(UIToast);
 
   @ViewChild('brewChart', { static: false }) public brewChart;
   @ViewChild('brewsPerDayChart', { static: false }) public brewsPerDayChart;
@@ -118,6 +122,9 @@ export class StatisticPage implements OnInit {
   public avgExtractionSeconds = 0;
   public extractionConsistencyScore = 0;
   public avgRatio = 0;
+  public get staleDataWarning(): boolean {
+    return this.apiRuntimeState.isStaleSnapshot();
+  }
 
   public getCurrencySymbol() {
     return this.currencyService.getActualCurrencySymbol();
@@ -508,12 +515,14 @@ export class StatisticPage implements OnInit {
       });
       body = await retry.json().catch(() => ({}));
       if (!retry.ok) {
+        this.showApiToastForCode(body?.code);
         throw new Error(body?.message || body?.code || retry.statusText);
       }
       return body as T;
     }
 
     if (!response.ok) {
+      this.showApiToastForCode(body?.code);
       throw new Error(body?.message || body?.code || response.statusText);
     }
 
@@ -526,6 +535,17 @@ export class StatisticPage implements OnInit {
     }
 
     return String(error);
+  }
+
+  private showApiToastForCode(code: string): void {
+    const keyByCode: Record<string, string> = {
+      unauthorized: 'API_ERROR_UNAUTHORIZED',
+      rate_limited: 'API_ERROR_RATE_LIMITED',
+      idempotency_conflict: 'API_ERROR_IDEMPOTENCY_CONFLICT',
+      gaggiuino_unavailable: 'API_ERROR_GAGGIUINO_UNAVAILABLE',
+    };
+    const key = keyByCode[String(code || '').toLowerCase()] || 'API_ERROR_REQUEST_FAILED';
+    void this.uiToast.showInfoToast(key, true);
   }
 
   private __getBrewsSortedForMonth(): Array<BrewView> {

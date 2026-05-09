@@ -1705,5 +1705,10 @@
   "WEB_BROWSER_BLUETOOTH_UNAVAILABLE_ALERT": "Bluetooth is not available in this browser. Use a BLE-capable browser like Chromium on desktop/mobile.",
   "WEB_BROWSER_GEOLOCATION_UNAVAILABLE_ALERT": "Geolocation is unavailable in this browser. Enable it in browser settings or use the mobile app.",
   "FEATURE_UNAVAILABLE": "Feature unavailable",
-  "WIFI_SIGNAL_STRENGTH": "Wifi dbM"
+  "WIFI_SIGNAL_STRENGTH": "Wifi dbM",
+  "API_ERROR_UNAUTHORIZED": "Session expired. Reload and sign in again.",
+  "API_ERROR_RATE_LIMITED": "Too many requests. Please retry shortly.",
+  "API_ERROR_IDEMPOTENCY_CONFLICT": "Request conflict detected. Retry with a new request id.",
+  "API_ERROR_GAGGIUINO_UNAVAILABLE": "Gaggiuino unavailable. Verify connectivity and retry.",
+  "API_ERROR_REQUEST_FAILED": "Request failed. Please retry."
 }
