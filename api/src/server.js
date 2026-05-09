@@ -35,7 +35,7 @@ const {
 const {
   HttpError,
   applyCors,
-  parseCookies,
+  getCookie,
   readJson,
   sendError,
   sendJson,
@@ -107,8 +107,7 @@ function isMutation(method) {
 
 function isAuthorized(request) {
   const appearsBrowser = Boolean(request.headers.origin);
-  const cookies = parseCookies(request);
-  const sessionToken = cookies[SESSION_COOKIE_NAME];
+  const sessionToken = getCookie(request, SESSION_COOKIE_NAME);
 
   if (config.sessionSigningSecret && verifySessionToken(sessionToken, config.sessionSigningSecret)) {
     return true;
@@ -150,8 +149,7 @@ function maybeIssueSessionCookie(request, response) {
     return;
   }
 
-  const cookies = parseCookies(request);
-  if (cookies[SESSION_COOKIE_NAME]) {
+  if (getCookie(request, SESSION_COOKIE_NAME)) {
     return;
   }
 
@@ -165,8 +163,7 @@ function getRateLimitKey(request) {
     return `token:${clientToken}`;
   }
 
-  const cookies = parseCookies(request);
-  const sessionToken = cookies[SESSION_COOKIE_NAME];
+  const sessionToken = getCookie(request, SESSION_COOKIE_NAME);
   if (sessionToken) {
     const digest = crypto.createHash('sha256').update(sessionToken).digest('hex');
     return `session:${digest}`;

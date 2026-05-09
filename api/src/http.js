@@ -56,33 +56,38 @@ function readJson(request, maxBytes) {
   });
 }
 
-function parseCookies(request) {
+function getCookie(request, cookieName) {
   const header = request.headers.cookie || '';
   if (!header) {
-    return Object.create(null);
+    return null;
   }
 
   const blockedKeys = new Set(['__proto__', 'constructor', 'prototype']);
+  const targetName = String(cookieName || '').trim();
+  if (!targetName || blockedKeys.has(targetName)) {
+    return null;
+  }
 
-  return header.split(';').reduce((acc, pair) => {
+  for (const pair of header.split(';')) {
     const index = pair.indexOf('=');
     if (index <= 0) {
-      return acc;
+      continue;
     }
 
     const key = pair.substring(0, index).trim();
-    if (blockedKeys.has(key)) {
-      return acc;
+    if (key !== targetName || blockedKeys.has(key)) {
+      continue;
     }
 
     const value = pair.substring(index + 1).trim();
     try {
-      acc[key] = decodeURIComponent(value);
+      return decodeURIComponent(value);
     } catch (_error) {
-      acc[key] = value;
+      return value;
     }
-    return acc;
-  }, Object.create(null));
+  }
+
+  return null;
 }
 
 function applyCors(request, response, allowedOrigins) {
@@ -106,7 +111,7 @@ function applyCors(request, response, allowedOrigins) {
 module.exports = {
   HttpError,
   applyCors,
-  parseCookies,
+  getCookie,
   readJson,
   sendError,
   sendJson,
