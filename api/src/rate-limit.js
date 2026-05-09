@@ -43,6 +43,7 @@ class DbRateLimiter {
     const now = Date.now();
     const resetAt = now + this.windowMs;
     const pool = this.getPool();
+    await this.pruneExpired(now, pool);
 
     await pool.query(
       `INSERT INTO api_rate_limits (rate_key, hit_count, reset_at)
@@ -62,6 +63,16 @@ class DbRateLimiter {
       allowed: count <= this.maxPerWindow,
       remaining: Math.max(0, this.maxPerWindow - count),
     };
+  }
+
+  async pruneExpired(now, pool) {
+    if (Math.random() > 0.01) {
+      return;
+    }
+    await pool.query(
+      'DELETE FROM api_rate_limits WHERE reset_at < ?',
+      [now],
+    );
   }
 }
 

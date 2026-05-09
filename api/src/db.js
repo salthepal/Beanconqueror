@@ -92,9 +92,16 @@ async function migrate() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
-    await getPool().query(
-      'ALTER TABLE api_idempotency ADD COLUMN request_hash CHAR(64) NOT NULL DEFAULT ""',
-    ).catch(() => {});
+    try {
+      await getPool().query(
+        "ALTER TABLE api_idempotency ADD COLUMN request_hash CHAR(64) NOT NULL DEFAULT ''",
+      );
+    } catch (error) {
+      // ER_DUP_FIELDNAME: column already exists.
+      if (error?.code !== 'ER_DUP_FIELDNAME') {
+        throw error;
+      }
+    }
   } finally {
     await getPool().query('SELECT RELEASE_LOCK(?)', [migrationLockName]);
   }

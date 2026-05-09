@@ -24,10 +24,7 @@ async function saveIdempotencyEntry(idempotencyKey, requestHash, status, payload
     `INSERT INTO api_idempotency (idempotency_key, request_hash, response_status, response_payload, expires_at)
      VALUES (?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))
      ON DUPLICATE KEY UPDATE
-       request_hash = VALUES(request_hash),
-       response_status = VALUES(response_status),
-       response_payload = VALUES(response_payload),
-       expires_at = VALUES(expires_at)`,
+       expires_at = expires_at`,
     [idempotencyKey, requestHash || '', status, JSON.stringify(payload || {}), ttlSeconds],
   );
 }

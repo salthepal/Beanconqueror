@@ -23,27 +23,26 @@ export class ApiErrorInterceptor implements HttpInterceptor {
     return next.handle(req).pipe(
       catchError((error: unknown) => {
         if (error instanceof HttpErrorResponse && error?.error?.code) {
-          const message = this.mapCodeToMessage(error.error.code);
-          this.uiToast.showInfoToast(message, false);
+          const messageKey = this.mapCodeToMessageKey(error.error.code);
+          this.uiToast.showInfoToast(messageKey, true);
         }
         return throwError(() => error);
       }),
     );
   }
 
-  private mapCodeToMessage(code: string): string {
+  private mapCodeToMessageKey(code: string): string {
     switch (code) {
       case 'unauthorized':
-        return 'Session expired. Reload and sign in again.';
+        return 'API_ERROR_UNAUTHORIZED';
       case 'rate_limited':
-        return 'Too many requests. Please retry shortly.';
+        return 'API_ERROR_RATE_LIMITED';
       case 'idempotency_conflict':
-        return 'Request conflict detected. Retry with a new request id.';
+        return 'API_ERROR_IDEMPOTENCY_CONFLICT';
       case 'gaggiuino_unavailable':
-        return 'Gaggiuino unavailable. Verify connectivity and retry.';
+        return 'API_ERROR_GAGGIUINO_UNAVAILABLE';
       default:
-        return 'Request failed. Please retry.';
+        return 'API_ERROR_REQUEST_FAILED';
     }
   }
 }
-

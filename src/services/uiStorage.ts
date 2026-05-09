@@ -4,6 +4,7 @@ import { Storage } from '@ionic/storage';
 
 import { AppEvent } from '../classes/appEvent/appEvent';
 import { AppEventType } from '../enums/appEvent/appEvent';
+import { UIToast } from './uiToast';
 import { EventQueueService } from './queueService/queue-service.service';
 import { ApiRuntimeStateService } from './api-runtime-state.service';
 import { UILog } from './uiLog';
@@ -16,6 +17,7 @@ export class UIStorage {
   private eventQueue = inject(EventQueueService);
   private readonly uiLog = inject(UILog);
   private readonly apiRuntimeState = inject(ApiRuntimeStateService);
+  private readonly uiToast = inject(UIToast);
 
   private _storage: Storage | null = null;
   private apiBaseUrl: string | null = null;
@@ -66,6 +68,10 @@ export class UIStorage {
         this.uiLog.log('UIStorage - Set Key - ' + _key + ' successfully');
         return true;
       } catch (ex) {
+        if (this.apiBaseUrl && !this.shouldRetryStorageError(ex)) {
+          await this.displayApiErrorToast(ex);
+          throw ex;
+        }
         // We could not access the database... do it again.
         this.uiLog.error(
           'UIStorage - Set Key - ' + _key + ' exception ' + JSON.stringify(ex),
@@ -174,6 +180,10 @@ export class UIStorage {
         this.uiLog.log('UIStorage - Get Key - ' + _key + ' successfully');
         return data;
       } catch (ex) {
+        if (this.apiBaseUrl && !this.shouldRetryStorageError(ex)) {
+          await this.displayApiErrorToast(ex);
+          throw ex;
+        }
         // We could not access the database... do it again.
         this.uiLog.error(
           'UIStorage - Get Key - ' + _key + ' exception ' + JSON.stringify(ex),
@@ -511,6 +521,7 @@ export class UIStorage {
     }
 
     if (response.status === 404 && options.allowNotFound) {
+      this.apiRuntimeState.clearStale();
       return null;
     }
 
@@ -526,7 +537,9 @@ export class UIStorage {
           errorMessage = payload.message;
         }
       } catch (_error) {}
-      this.apiRuntimeState.markStale();
+      if (response.status >= 500 || response.status === 429) {
+        this.apiRuntimeState.markStale();
+      }
       throw new Error(`${errorCode}: ${errorMessage}`);
     }
 
@@ -538,5 +551,44 @@ export class UIStorage {
     const payload = await response.json();
     this.apiRuntimeState.clearStale();
     return payload;
+  }
+
+  private getErrorCode(error: unknown): string {
+    if (!(error instanceof Error)) {
+      return '';
+    }
+    const index = error.message.indexOf(':');
+    if (index <= 0) {
+      return '';
+    }
+    return error.message.substring(0, index).trim().toLowerCase();
+  }
+
+  private shouldRetryStorageError(error: unknown): boolean {
+    const code = this.getErrorCode(error);
+    if (!code) {
+      return true;
+    }
+    return ![
+      'unauthorized',
+      'rate_limited',
+      'idempotency_conflict',
+      'invalid_json',
+      'payload_too_large',
+      'not_found',
+      'bad_request',
+    ].includes(code);
+  }
+
+  private async displayApiErrorToast(error: unknown): Promise<void> {
+    const code = this.getErrorCode(error);
+    const messageByCode: Record<string, string> = {
+      unauthorized: 'API_ERROR_UNAUTHORIZED',
+      rate_limited: 'API_ERROR_RATE_LIMITED',
+      idempotency_conflict: 'API_ERROR_IDEMPOTENCY_CONFLICT',
+      gaggiuino_unavailable: 'API_ERROR_GAGGIUINO_UNAVAILABLE',
+    };
+    const messageKey = messageByCode[code] || 'API_ERROR_REQUEST_FAILED';
+    await this.uiToast.showInfoToast(messageKey, true);
   }
 }

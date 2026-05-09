@@ -115,7 +115,11 @@ function isMutation(method) {
 }
 
 function getClientFingerprint(request) {
-  const source = `${request.headers['user-agent'] || ''}|${request.socket.remoteAddress || ''}`;
+  const forwarded = String(request.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
+  const clientIp = forwarded || request.socket.remoteAddress || '';
+  const source = `${request.headers['user-agent'] || ''}|${clientIp}`;
   return crypto.createHash('sha256').update(source).digest('hex');
 }
 
@@ -169,12 +173,12 @@ function getAuthMode(request) {
   return null;
 }
 
-function maybeIssueSessionCookie(request, response) {
+function maybeIssueSessionCookie(request, response, authMode) {
   if (!config.sessionSigningSecret) {
     return;
   }
 
-  if (getCookie(request, SESSION_COOKIE_NAME)) {
+  if (authMode !== 'session-rotated' && getCookie(request, SESSION_COOKIE_NAME)) {
     return;
   }
 
@@ -501,7 +505,7 @@ async function route(request, response) {
       metrics.unauthorizedCount += 1;
       throw new HttpError(401, 'unauthorized', 'Authentication required');
     }
-    maybeIssueSessionCookie(request, response);
+    maybeIssueSessionCookie(request, response, authMode);
 
     if (await handleOperationalRoutes(request, response, url)) {
       return;
@@ -650,6 +654,19 @@ function startGaggiuinoAutoSyncMonitor() {
         breakerState = 'closed';
         consecutiveFailures = 0;
         nextDelay = config.gaggiuino.autoSyncIntervalMs;
+        return;
+      }
+
+      if (breakerState === 'open') {
+        breakerState = 'half-open';
+        await updateAutoSyncState({
+          enabled: true,
+          running: false,
+          breakerState,
+          consecutiveFailures,
+          nextPollInMs: config.gaggiuino.autoSyncMaxBackoffMs,
+        }).catch((err) => console.error('Failed to update auto-sync state:', err));
+        nextDelay = config.gaggiuino.autoSyncMaxBackoffMs;
         return;
       }
 
