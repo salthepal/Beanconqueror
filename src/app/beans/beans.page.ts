@@ -698,8 +698,16 @@ export class BeansPage implements OnDestroy {
         this.uiLog.warn('Bean QR code scan error:', error);
       }
     } else {
-      // Test sample for development
-      // await this.intenthandler.handleQRCodeLink('https://beanconqueror.com/?qr=e7ada0a6');
+      try {
+        const manualCode = window.prompt(
+          'Paste Beanconqueror QR link to import bean',
+        );
+        if (manualCode && manualCode.trim()) {
+          await this.intenthandler.handleQRCodeLink(manualCode.trim());
+        }
+      } catch (error) {
+        this.uiLog.warn('Bean QR code manual import error:', error);
+      }
     }
     this.loadBeans();
   }
