@@ -25,10 +25,46 @@ function readBoolean(name, fallback = false) {
   return fallback;
 }
 
+function readHostnameList(name) {
+  return (process.env[name] || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function buildCorsOrigins() {
+  const explicitOrigins = readCsv('CORS_ORIGINS');
+  const tailscaleHosts = readHostnameList('TAILSCALE_HOSTNAMES');
+  const tailscaleAllowHttp = readBoolean('TAILSCALE_ALLOW_HTTP', false);
+  const derivedOrigins = [];
+
+  for (const host of tailscaleHosts) {
+    if (!host.endsWith('.ts.net')) {
+      continue;
+    }
+    derivedOrigins.push(`https://${host}`);
+    if (tailscaleAllowHttp) {
+      derivedOrigins.push(`http://${host}`);
+    }
+  }
+
+  return Array.from(new Set([...explicitOrigins, ...derivedOrigins]));
+}
+
 const config = {
+  nodeEnv: process.env.NODE_ENV || 'production',
+  isDevelopment: (process.env.NODE_ENV || 'production') === 'development',
   port: readInteger('API_PORT', 3000),
-  apiAuthToken: process.env.API_AUTH_TOKEN || '',
-  corsOrigins: readCsv('CORS_ORIGINS'),
+  clientApiToken: process.env.API_CLIENT_TOKEN || '',
+  sessionSigningSecret: process.env.SESSION_SIGNING_SECRET || '',
+  sessionTtlSeconds: readInteger('SESSION_TTL_SECONDS', 3600),
+  allowLegacyTokenAuth: readBoolean('ALLOW_LEGACY_TOKEN_AUTH', true),
+  requestBodyLimitBytes: readInteger('REQUEST_BODY_LIMIT_BYTES', 1024 * 1024),
+  rateLimitWindowMs: readInteger('RATE_LIMIT_WINDOW_MS', 60_000),
+  rateLimitMaxMutations: readInteger('RATE_LIMIT_MAX_MUTATIONS', 120),
+  metricsEnabled: readBoolean('METRICS_ENABLED', true),
+  idempotencyTtlSeconds: readInteger('IDEMPOTENCY_TTL_SECONDS', 3600),
+  corsOrigins: buildCorsOrigins(),
   db: {
     host: process.env.DB_HOST || 'mariadb',
     port: readInteger('DB_PORT', 3306),

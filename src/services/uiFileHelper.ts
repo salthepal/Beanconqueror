@@ -208,20 +208,22 @@ export class UIFileHelper extends InstanceClass {
 
   private async readServerStoredJSONFile(path: string): Promise<any> {
     const runtimeConfig = (window as unknown as {
-      __beanconquerorConfig?: { apiBaseUrl?: string; apiAuthToken?: string };
+      __beanconquerorConfig?: { apiBaseUrl?: string };
     }).__beanconquerorConfig;
     const apiBaseUrl = (runtimeConfig?.apiBaseUrl || '').trim().replace(/\/+$/, '');
-    const headers = new Headers();
-
-    if (runtimeConfig?.apiAuthToken) {
-      headers.set('X-Beanconqueror-Api-Token', runtimeConfig.apiAuthToken);
-    }
 
     const storageKey = `FILE:${this.normalizeFileName(path)}`;
-    const response = await fetch(
+    const fetchStorage = async (resource: string) =>
+      await fetch(resource, { credentials: 'include' });
+
+    let response = await fetchStorage(
       `${apiBaseUrl}/storage/${encodeURIComponent(storageKey)}`,
-      { headers },
     );
+    if (response.status === 401) {
+      response = await fetchStorage(
+        `${apiBaseUrl}/storage/${encodeURIComponent(storageKey)}`,
+      );
+    }
     const body = await response.json().catch(() => ({}));
 
     if (response.ok) {
@@ -230,7 +232,10 @@ export class UIFileHelper extends InstanceClass {
 
     // Some reverse-proxy setups reject encoded slash keys in path segments.
     // Fallback to full storage map lookup for FILE:* entries.
-    const mapResponse = await fetch(`${apiBaseUrl}/storage`, { headers });
+    let mapResponse = await fetchStorage(`${apiBaseUrl}/storage`);
+    if (mapResponse.status === 401) {
+      mapResponse = await fetchStorage(`${apiBaseUrl}/storage`);
+    }
     const mapBody = await mapResponse.json().catch(() => ({}));
     if (!mapResponse.ok) {
       throw new Error(

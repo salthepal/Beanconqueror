@@ -8,8 +8,8 @@
 - MariaDB-backed app storage.
 - Local Gaggiuino API proxy/import endpoints.
 - Runtime config templating with `envsubst` into `assets/env.js`.
-- Token-protected API calls from the browser app to the bundled API.
-- Example `docker-compose.yml` binding host port `8080` to container port `80`.
+- Session-cookie auth for same-origin browser calls and token auth for machine clients.
+- Example `docker-compose.yml` binding host port `8080` to container port `8080`.
 
 ## Build And Run
 
@@ -24,11 +24,12 @@ Compose starts the app and MariaDB. MariaDB data persists in the `mariadb-data` 
 ## Published Image
 
 ```bash
-docker run --rm -p 8080:80 \
+docker run --rm -p 8080:8080 \
   -e DB_HOST=mariadb \
   -e DB_NAME=beanconqueror \
   -e DB_USER=beanconqueror \
-  -e DB_PASSWORD=change-me \
+  -e DB_PASSWORD=replace-with-strong-db-password \
+  -e SESSION_SIGNING_SECRET=replace-me \
   -e API_BASE_URL=/api \
   ghcr.io/salthepal/beanconqueror:latest
 ```
@@ -59,7 +60,6 @@ At container start, `docker/entrypoint/start.sh` generates:
 Supported browser config:
 
 - `API_BASE_URL` defaults to `/api`
-- `API_AUTH_TOKEN` is injected into browser requests. If omitted, startup generates one.
 - `FEATURE_FLAGS_JSON` defaults to `{}`
 
 Supported API config:
@@ -70,12 +70,35 @@ Supported API config:
 - `DB_USER`
 - `DB_PASSWORD`
 - `CORS_ORIGINS`
+- `TAILSCALE_HOSTNAMES`
+- `TAILSCALE_ALLOW_HTTP`
+- `API_CLIENT_TOKEN`
+- `SESSION_SIGNING_SECRET`
 - `GAGGIUINO_BASE_URL`
 - `GAGGIUINO_TIMEOUT_MS`
 
 The generated `assets/env.js` is loaded by `src/index.html` before app bootstrap.
 
 `CORS_ORIGINS` is empty by default. Leave it empty for the bundled same-origin app. Set it only when a separate trusted origin must call the API.
+
+`TAILSCALE_HOSTNAMES` accepts comma-separated `*.ts.net` hostnames and auto-derives allowed HTTPS CORS origins. No tailnet IP hardcoding required.
+
+`TAILSCALE_ALLOW_HTTP=false` by default. Change to `true` only if you intentionally run plain HTTP inside tailnet.
+
+## Tailscale Quick Setup
+
+In `.env`:
+
+```text
+TAILSCALE_HOSTNAMES=your-node.ts.net
+TAILSCALE_ALLOW_HTTP=false
+```
+
+Then restart:
+
+```bash
+docker compose up -d
+```
 
 ## API Endpoints
 
@@ -95,7 +118,24 @@ Gaggiuino:
 - `GET /api/gaggiuino/shots`
 - `POST /api/gaggiuino/shots/import-latest`
 
-All storage and Gaggiuino API endpoints require `X-Beanconqueror-Api-Token` or `Authorization: Bearer <token>` when `API_AUTH_TOKEN` is set. The bundled container sets or generates this token before rendering `assets/env.js`.
+All storage and Gaggiuino API endpoints require one of:
+- valid `beanconqueror_session` cookie (same-origin browser session)
+- `X-Beanconqueror-Client-Token`
+- `Authorization: Bearer <API_CLIENT_TOKEN>`
+
+## Backups
+
+Scripts:
+- `scripts/backup.sh`
+- `scripts/restore.sh`
+
+Optional scheduled backup container (example):
+
+```yaml
+backup:
+  image: mariadb:11
+  entrypoint: ["/bin/sh", "-c", "while true; do /scripts/backup.sh /backups; sleep 86400; done"]
+```
 
 ## Gaggiuino Notes
 

@@ -1,0 +1,3 @@
+# Node 22 base image bundles npm with picomatch 4.0.3 under /usr/local/lib/node_modules/npm.
+# Application dependency graph is pinned to picomatch 4.0.4.
+CVE-2026-33671

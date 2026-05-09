@@ -28,6 +28,7 @@ import {
   create,
   download,
   expandOutline,
+  gitCompareOutline,
   globeOutline,
   shareSocialOutline,
 } from 'ionicons/icons';
@@ -78,6 +79,7 @@ import { UIMillHelper } from '../../../services/uiMillHelper';
 import { UIPreparationHelper } from '../../../services/uiPreparationHelper';
 import { UISettingsStorage } from '../../../services/uiSettingsStorage';
 import { BrewFlowComponent } from '../brew-flow/brew-flow.component';
+import { BrewCompareModalComponent } from '../brew-compare-modal/brew-compare-modal.component';
 import { BrewPopoverExtractionComponent } from '../brew-popover-extraction/brew-popover-extraction.component';
 
 declare var Plotly;
@@ -169,6 +171,7 @@ export class BrewDetailComponent {
       download,
       shareSocialOutline,
       expandOutline,
+      gitCompareOutline,
       clipboardOutline,
     });
   }
@@ -341,6 +344,19 @@ export class BrewDetailComponent {
         }, 150);
       } catch (ex) {}
     });
+  }
+
+  public async compareWithPrevious() {
+    const modal = await this.modalController.create({
+      component: BrewCompareModalComponent,
+      id: BrewCompareModalComponent.COMPONENT_ID,
+      cssClass: 'popover-actions',
+      componentProps: {
+        brew: this.data,
+      },
+    });
+    await modal.present();
+    await modal.onWillDismiss();
   }
 
   public async shareFlowProfile() {

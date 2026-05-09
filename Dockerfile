@@ -18,6 +18,7 @@ RUN npm ci --omit=dev
 FROM node:22-alpine AS runtime
 
 RUN apk add --no-cache gettext nginx
+RUN addgroup -S app && adduser -S app -G app
 
 COPY docker/nginx/default.conf /etc/nginx/http.d/default.conf
 COPY docker/entrypoint/start.sh /usr/local/bin/beanconqueror-start
@@ -29,6 +30,8 @@ COPY --from=build /app/www/browser/ /usr/share/nginx/html/
 COPY docker/runtime-config/env.template.js /tmp/env.template.js
 COPY api /app/api
 COPY --from=api-deps /api/node_modules /app/api/node_modules
+RUN chown -R app:app /usr/share/nginx/html /app /var/lib/nginx /var/log/nginx /etc/nginx/http.d /tmp/env.template.js
 
-EXPOSE 80
+USER app
+EXPOSE 8080
 CMD ["/usr/local/bin/beanconqueror-start"]

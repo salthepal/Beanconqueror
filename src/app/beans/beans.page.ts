@@ -12,11 +12,13 @@ import { FormsModule } from '@angular/forms';
 
 import {
   IonButton,
+  IonCheckbox,
   IonContent,
   IonHeader,
   IonIcon,
   IonLabel,
   IonMenuButton,
+  IonSkeletonText,
   IonSearchbar,
   IonSegment,
   IonSegmentButton,
@@ -24,7 +26,7 @@ import {
   Platform,
 } from '@ionic/angular/standalone';
 
-import { TranslatePipe } from '@ngx-translate/core';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { AgVirtualScrollComponent } from 'ag-virtual-scroll';
 import _ from 'lodash';
 import { Subscription } from 'rxjs';
@@ -76,6 +78,7 @@ import { BeansAddComponent } from './beans-add/beans-add.component';
     HeaderButtonComponent,
     IonHeader,
     IonMenuButton,
+    IonSkeletonText,
     IonContent,
     IonSegment,
     IonSegmentButton,
@@ -83,6 +86,7 @@ import { BeansAddComponent } from './beans-add/beans-add.component';
     IonSearchbar,
     IonIcon,
     IonButton,
+    IonCheckbox,
   ],
 })
 export class BeansPage implements OnDestroy {
@@ -105,6 +109,7 @@ export class BeansPage implements OnDestroy {
   private readonly cloudAiBeanImportService = inject(CloudAIBeanImportService);
   private readonly uiAlert = inject(UIAlert);
   private readonly uiFileHelper = inject(UIFileHelper);
+  private readonly translate = inject(TranslateService);
 
   public beans: Bean[] = [];
 
@@ -166,6 +171,12 @@ export class BeansPage implements OnDestroy {
   public uiShallBarBeDisplayed = false;
   public uiIsTextSearchActive = false;
   public uiSearchText = '';
+  public quickOpenFilter: 'all' | 'favorites' | 'recent' | 'low' = 'all';
+  public loadingBeans = false;
+  public compactDensity: 'comfortable' | 'compact' | 'ultra' = 'compact';
+  public lowBeanThreshold = 250;
+  public selectionMode = false;
+  public selectedBeanIds = new Set<string>();
 
   private savedScrollPositions: {
     open: number;
@@ -186,6 +197,7 @@ export class BeansPage implements OnDestroy {
   private forceScrollToTop = false;
 
   public ionViewWillEnter(): void {
+    this.loadUiPrefs();
     this.settings = this.uiSettingsStorage.getSettings();
     this.archivedBeansSort = this.settings.bean_sort.ARCHIVED;
     this.openBeansSort = this.settings.bean_sort.OPEN;
@@ -208,7 +220,7 @@ export class BeansPage implements OnDestroy {
           this.lastInteractedBeanId = val.obj.config.uuid;
         }
         // If an bean is added/deleted/changed we trigger this here, why we do this? Because when we import from the Beanconqueror website an bean, and we're actually on this page, this won't get shown.
-        this.loadBeans();
+        this.refreshBeansView();
       });
   }
 
@@ -263,6 +275,7 @@ export class BeansPage implements OnDestroy {
   }
 
   public loadBeans(resetScroll: boolean = false): void {
+    this.loadingBeans = true;
     if (resetScroll) {
       this.forceScrollToTop = true;
       if (this.bean_segment === 'open') {
@@ -279,6 +292,34 @@ export class BeansPage implements OnDestroy {
       this.saveScrollPositions();
     }
 
+    this.__initializeBeans();
+    this.changeDetectorRef.detectChanges();
+    this.retriggerScroll();
+    this.setUIParams();
+    this.loadingBeans = false;
+  }
+
+  private loadUiPrefs(): void {
+    const density = localStorage.getItem('beans_density_mode');
+    if (
+      density === 'comfortable' ||
+      density === 'compact' ||
+      density === 'ultra'
+    ) {
+      this.compactDensity = density;
+    }
+    const threshold = Number(localStorage.getItem('beans_low_threshold'));
+    if (Number.isFinite(threshold) && threshold > 0) {
+      this.lowBeanThreshold = threshold;
+    }
+  }
+
+  private saveUiPrefs(): void {
+    localStorage.setItem('beans_density_mode', this.compactDensity);
+    localStorage.setItem('beans_low_threshold', String(this.lowBeanThreshold));
+  }
+
+  public refreshBeansView(): void {
     this.__initializeBeans();
     this.changeDetectorRef.detectChanges();
     this.retriggerScroll();
@@ -310,6 +351,9 @@ export class BeansPage implements OnDestroy {
   }
 
   public segmentChanged() {
+    if (this.bean_segment !== 'open') {
+      this.quickOpenFilter = 'all';
+    }
     this.uiSearchText = this.manageSearchTextScope(this.bean_segment, false);
     this.saveScrollPositions();
     this.retriggerScroll();
@@ -438,7 +482,159 @@ export class BeansPage implements OnDestroy {
 
   public async add() {
     await this.uiBeanHelper.addBean();
-    this.loadBeans();
+    this.refreshBeansView();
+  }
+
+  public quickFilterChanged() {
+    if (this.bean_segment !== 'open') {
+      return;
+    }
+    this.forceScrollToTop = true;
+    this.__initializeBeansView('open');
+    this.changeDetectorRef.detectChanges();
+    this.retriggerScroll();
+  }
+
+  public densityChanged() {
+    this.uiIsCollapseActive = this.compactDensity !== 'comfortable';
+    this.saveUiPrefs();
+    this.refreshBeansView();
+  }
+
+  public thresholdChanged() {
+    if (!Number.isFinite(this.lowBeanThreshold) || this.lowBeanThreshold < 50) {
+      this.lowBeanThreshold = 50;
+    }
+    if (this.lowBeanThreshold > 2000) {
+      this.lowBeanThreshold = 2000;
+    }
+    this.saveUiPrefs();
+    this.quickFilterChanged();
+  }
+
+  public async bulkFavoriteVisible() {
+    const target = this.getBulkTargetBeans();
+    const updates = target
+      .filter((bean) => !bean.favourite)
+      .map(async (bean) => {
+        bean.favourite = true;
+        await this.uiBeanStorage.update(bean);
+      });
+    await Promise.all(updates);
+    this.clearSelection();
+    this.refreshBeansView();
+  }
+
+  public async bulkArchiveVisible() {
+    const target = this.getBulkTargetBeans();
+    if (target.length === 0) {
+      return;
+    }
+    const confirm = await this.uiAlert.showConfirm(
+      `${this.translate.instant('TAB_ARCHIVE')} (${target.length})`,
+      this.translate.instant('NAV_BEANS'),
+      false,
+    );
+    if (confirm !== 'YES') {
+      return;
+    }
+    const updates = target
+      .filter((bean) => !bean.finished)
+      .map(async (bean) => {
+        bean.finished = true;
+        await this.uiBeanStorage.update(bean);
+      });
+    await Promise.all(updates);
+    this.clearSelection();
+    this.refreshBeansView();
+  }
+
+  public async bulkFreezeVisible() {
+    const visible = this.getBulkTargetBeans();
+    if (visible.length === 0) {
+      return;
+    }
+    const confirm = await this.uiAlert.showConfirm(
+      `${this.translate.instant('FROZEN_BEANS')} (${visible.length})`,
+      this.translate.instant('NAV_BEANS'),
+      false,
+    );
+    if (confirm !== 'YES') {
+      return;
+    }
+    const frozenDate = new Date().toISOString();
+    const updates = visible
+      .filter((bean) => !bean.isFrozen())
+      .map(async (bean) => {
+        bean.frozenDate = frozenDate;
+        bean.unfrozenDate = '';
+        await this.uiBeanStorage.update(bean);
+      });
+    await Promise.all(updates);
+    this.clearSelection();
+    this.refreshBeansView();
+  }
+
+  public toggleSelectionMode() {
+    this.selectionMode = !this.selectionMode;
+    if (!this.selectionMode) {
+      this.clearSelection();
+    }
+  }
+
+  public isSelected(item: Bean | BeanGroup): boolean {
+    if (item['beans']) {
+      return item['beans'].every((bean) => this.selectedBeanIds.has(bean.config.uuid));
+    }
+    return this.selectedBeanIds.has(item['config'].uuid);
+  }
+
+  public toggleSelected(item: Bean | BeanGroup, checked: boolean) {
+    if (item['beans']) {
+      for (const bean of item['beans']) {
+        if (checked) {
+          this.selectedBeanIds.add(bean.config.uuid);
+        } else {
+          this.selectedBeanIds.delete(bean.config.uuid);
+        }
+      }
+      return;
+    }
+
+    const uuid = item['config'].uuid;
+    if (checked) {
+      this.selectedBeanIds.add(uuid);
+    } else {
+      this.selectedBeanIds.delete(uuid);
+    }
+  }
+
+  public getSelectedCount(): number {
+    return this.selectedBeanIds.size;
+  }
+
+  public clearSelection() {
+    this.selectedBeanIds.clear();
+  }
+
+  private getBulkTargetBeans(): Bean[] {
+    const visibleFlat = this.flattenBeans(this.openBeans);
+    if (this.selectedBeanIds.size === 0) {
+      return visibleFlat;
+    }
+    return visibleFlat.filter((bean) => this.selectedBeanIds.has(bean.config.uuid));
+  }
+
+  private flattenBeans(items: (Bean | BeanGroup)[]): Bean[] {
+    const flattened: Bean[] = [];
+    for (const item of items) {
+      if (item['beans']) {
+        flattened.push(...item['beans']);
+      } else {
+        flattened.push(item as Bean);
+      }
+    }
+    return flattened;
   }
 
   public async beanPopover() {
@@ -1007,7 +1203,7 @@ export class BeansPage implements OnDestroy {
             snapToDomId = 'bean-' + item['config'].uuid;
           }
 
-          const rowHeight = this.uiIsCollapseActive ? 60 : 210;
+        const rowHeight = this.getRowHeight();
           const heights = (scrollComponent as any).previousItemsHeight;
 
           let exactOffset = 0;
@@ -1048,7 +1244,7 @@ export class BeansPage implements OnDestroy {
         ) as HTMLElement;
         if (contentHeightEl) {
           const h = (scrollComponent as any).previousItemsHeight;
-          const rH = this.uiIsCollapseActive ? 60 : 210;
+          const rH = this.getRowHeight();
           let cHeight = 0;
           if (h && h.length > 0) {
             cHeight = h.reduce((sum, val) => sum + (val ? val : rH), 0);
@@ -1128,10 +1324,15 @@ export class BeansPage implements OnDestroy {
       filters,
     );
 
+    const scopedBeans =
+      _type === 'open'
+        ? this.applyOpenQuickFilter(filteredBeans)
+        : filteredBeans;
+
     const groupedBeans: (Bean | BeanGroup)[] = [];
     const processedUuids = new Set<string>();
 
-    for (const bean of filteredBeans) {
+    for (const bean of scopedBeans) {
       if (processedUuids.has(bean.config.uuid)) {
         continue;
       }
@@ -1139,7 +1340,7 @@ export class BeansPage implements OnDestroy {
       if (bean.frozenGroupId) {
         // Find all beans with this frozenGroupId in the filtered list
         // We only look in the filtered list to respect current filters
-        const groupMembers = filteredBeans.filter(
+        const groupMembers = scopedBeans.filter(
           (b) => b.frozenGroupId === bean.frozenGroupId,
         );
 
@@ -1168,6 +1369,42 @@ export class BeansPage implements OnDestroy {
       this.frozenBeans = groupedBeans;
     }
     this.retriggerScroll();
+  }
+
+  private applyOpenQuickFilter(beans: Bean[]): Bean[] {
+    if (this.quickOpenFilter === 'all') {
+      return beans;
+    }
+
+    if (this.quickOpenFilter === 'favorites') {
+      return beans.filter((bean) => bean.favourite === true);
+    }
+
+    if (this.quickOpenFilter === 'recent') {
+      const sorted = [...beans].sort(
+        (a, b) => (b.config?.unix_timestamp || 0) - (a.config?.unix_timestamp || 0),
+      );
+      return sorted.slice(0, 20);
+    }
+
+    if (this.quickOpenFilter === 'low') {
+      return beans.filter((bean) => {
+        const remaining = Number(bean.weight || 0);
+        return remaining > 0 && remaining <= this.lowBeanThreshold;
+      });
+    }
+
+    return beans;
+  }
+
+  public getRowHeight(): number {
+    if (this.compactDensity === 'ultra') {
+      return 52;
+    }
+    if (this.compactDensity === 'compact') {
+      return 96;
+    }
+    return 210;
   }
 
   private manageFilterScope(_type: string): IBeanPageFilter {

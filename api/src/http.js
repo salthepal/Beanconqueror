@@ -1,18 +1,31 @@
-function sendJson(response, status, payload) {
+class HttpError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function sendJson(response, status, payload, headers = {}) {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
+    ...headers,
   });
   response.end(body);
 }
 
-function sendNoContent(response) {
-  response.writeHead(204);
+function sendNoContent(response, headers = {}) {
+  response.writeHead(204, headers);
   response.end();
 }
 
-function readJson(request) {
+function sendError(response, status, code, message, requestId) {
+  sendJson(response, status, { code, message, requestId });
+}
+
+function readJson(request, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let length = 0;
@@ -20,8 +33,8 @@ function readJson(request) {
     request.on('data', (chunk) => {
       chunks.push(chunk);
       length += chunk.length;
-      if (length > 20 * 1024 * 1024) {
-        reject(new Error('Request body too large'));
+      if (length > maxBytes) {
+        reject(new HttpError(413, 'payload_too_large', 'Request body too large'));
         request.destroy();
       }
     });
@@ -35,7 +48,7 @@ function readJson(request) {
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
       } catch (error) {
-        reject(error);
+        reject(new HttpError(400, 'invalid_json', 'Invalid JSON payload'));
       }
     });
 
@@ -43,11 +56,46 @@ function readJson(request) {
   });
 }
 
+function getCookie(request, cookieName) {
+  const header = request.headers.cookie || '';
+  if (!header) {
+    return null;
+  }
+
+  const blockedKeys = new Set(['__proto__', 'constructor', 'prototype']);
+  const targetName = String(cookieName || '').trim();
+  if (!targetName || blockedKeys.has(targetName)) {
+    return null;
+  }
+
+  for (const pair of header.split(';')) {
+    const index = pair.indexOf('=');
+    if (index <= 0) {
+      continue;
+    }
+
+    const key = pair.substring(0, index).trim();
+    if (key !== targetName || blockedKeys.has(key)) {
+      continue;
+    }
+
+    const value = pair.substring(index + 1).trim();
+    try {
+      return decodeURIComponent(value);
+    } catch (_error) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 function applyCors(request, response, allowedOrigins) {
   const origin = request.headers.origin;
   if (origin && allowedOrigins.includes(origin)) {
     response.setHeader('Access-Control-Allow-Origin', origin);
     response.setHeader('Vary', 'Origin');
+    response.setHeader('Access-Control-Allow-Credentials', 'true');
   }
 
   response.setHeader(
@@ -56,8 +104,16 @@ function applyCors(request, response, allowedOrigins) {
   );
   response.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, Authorization, X-Beanconqueror-Api-Token',
+    'Content-Type, Authorization, X-Beanconqueror-Client-Token, Idempotency-Key',
   );
 }
 
-module.exports = { applyCors, readJson, sendJson, sendNoContent };
+module.exports = {
+  HttpError,
+  applyCors,
+  getCookie,
+  readJson,
+  sendError,
+  sendJson,
+  sendNoContent,
+};

@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const http = require('http');
 
 const {
@@ -8,8 +9,14 @@ const {
   runAnalysis,
   setConfig: setAiAnalysisConfig,
 } = require('./ai-analysis');
+const {
+  SESSION_COOKIE_NAME,
+  buildSessionCookie,
+  issueSessionToken,
+  verifySessionToken,
+} = require('./auth');
 const { config } = require('./config');
-const { migrate } = require('./db');
+const { checkDatabaseReady, migrate } = require('./db');
 const {
   GaggiuinoConnectionError,
   getAutoSyncState,
@@ -25,7 +32,21 @@ const {
   updateAutoSyncState,
   updateGaggiuinoSettings,
 } = require('./gaggiuino-client');
-const { applyCors, readJson, sendJson, sendNoContent } = require('./http');
+const {
+  HttpError,
+  applyCors,
+  getCookie,
+  readJson,
+  sendError,
+  sendJson,
+  sendNoContent,
+} = require('./http');
+const { RateLimiter } = require('./rate-limit');
+const {
+  getIdempotencyEntry,
+  pruneIdempotencyEntries,
+  saveIdempotencyEntry,
+} = require('./idempotency-store');
 const {
   clearStorage,
   getAllStorage,
@@ -33,6 +54,43 @@ const {
   importStorage,
   setStorageValue,
 } = require('./storage-repository');
+const {
+  validateAiAnalysisConfig,
+  validateGaggiuinoConfig,
+  validateImportLatestRequest,
+  validateStorageImport,
+  validateStoragePut,
+} = require('./validation');
+
+const metrics = {
+  requestCount: 0,
+  errorCount: 0,
+  syncSuccessCount: 0,
+  syncFailureCount: 0,
+  aiRunSuccessCount: 0,
+  aiRunFailureCount: 0,
+  routeLatencyBuckets: {
+    lt100ms: 0,
+    lt500ms: 0,
+    lt1000ms: 0,
+    gte1000ms: 0,
+  },
+};
+
+const limiter = new RateLimiter(
+  config.rateLimitWindowMs,
+  config.rateLimitMaxMutations,
+);
+
+function log(level, message, data = {}) {
+  const payload = {
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    ...data,
+  };
+  console.log(JSON.stringify(payload));
+}
 
 function getStorageKey(pathname) {
   const prefix = '/api/storage/';
@@ -43,84 +101,183 @@ function getStorageKey(pathname) {
   return decodeURIComponent(pathname.substring(prefix.length));
 }
 
+function isMutation(method) {
+  return ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method);
+}
+
 function isAuthorized(request) {
-  if (!config.apiAuthToken) {
+  const appearsBrowser = Boolean(request.headers.origin);
+  const sessionToken = getCookie(request, SESSION_COOKIE_NAME);
+
+  if (config.sessionSigningSecret && verifySessionToken(sessionToken, config.sessionSigningSecret)) {
     return true;
   }
 
-  const headerToken = request.headers['x-beanconqueror-api-token'];
-  if (headerToken === config.apiAuthToken) {
+  if (!config.clientApiToken) {
+    return false;
+  }
+
+  const headerToken = request.headers['x-beanconqueror-client-token'];
+  if (headerToken === config.clientApiToken) {
+    return true;
+  }
+
+  const legacyHeaderToken = request.headers['x-beanconqueror-api-token'];
+  if (legacyHeaderToken === config.clientApiToken && config.allowLegacyTokenAuth) {
+    if (appearsBrowser) {
+      log('warn', 'legacy_auth_rejected_for_browser');
+      return false;
+    }
+    log('warn', 'legacy_api_token_header_used');
     return true;
   }
 
   const authorization = request.headers.authorization || '';
-  return authorization === `Bearer ${config.apiAuthToken}`;
+  if (authorization === `Bearer ${config.clientApiToken}` && config.allowLegacyTokenAuth) {
+    if (appearsBrowser) {
+      log('warn', 'legacy_bearer_auth_rejected_for_browser');
+      return false;
+    }
+    log('warn', 'legacy_bearer_auth_used');
+    return true;
+  }
+  return false;
+}
+
+function maybeIssueSessionCookie(request, response) {
+  if (!config.sessionSigningSecret) {
+    return;
+  }
+
+  if (getCookie(request, SESSION_COOKIE_NAME)) {
+    return;
+  }
+
+  const token = issueSessionToken(config.sessionSigningSecret, config.sessionTtlSeconds);
+  response.setHeader('Set-Cookie', buildSessionCookie(token, config.sessionTtlSeconds));
+}
+
+function getRateLimitKey(request) {
+  const clientToken = request.headers['x-beanconqueror-client-token'];
+  if (clientToken) {
+    return `token:${clientToken}`;
+  }
+
+  const sessionToken = getCookie(request, SESSION_COOKIE_NAME);
+  if (sessionToken) {
+    const digest = crypto.createHash('sha256').update(sessionToken).digest('hex');
+    return `session:${digest}`;
+  }
+
+  const forwarded = String(request.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
+  if (forwarded) {
+    return `ip:${forwarded}`;
+  }
+
+  return `ip:${request.socket.remoteAddress || 'unknown'}`;
+}
+
+function enforceRateLimit(request) {
+  if (!isMutation(request.method)) {
+    return;
+  }
+
+  const key = getRateLimitKey(request);
+  const result = limiter.hit(key);
+  if (!result.allowed) {
+    throw new HttpError(429, 'rate_limited', 'Too many requests');
+  }
+}
+
+function getIdempotencyKey(request) {
+  if (!isMutation(request.method)) {
+    return null;
+  }
+  const raw = request.headers['idempotency-key'];
+  if (!raw || typeof raw !== 'string') {
+    return null;
+  }
+  return `${request.method}:${request.url}:${raw}`;
+}
+
+function replayIdempotentResponse(response, cacheEntry) {
+  if (cacheEntry.status === 204) {
+    sendNoContent(response);
+    return;
+  }
+  sendJson(response, cacheEntry.status, cacheEntry.payload);
+}
+
+async function saveIdempotentResponse(idempotencyKey, status, payload) {
+  if (!idempotencyKey) {
+    return;
+  }
+  await saveIdempotencyEntry(
+    idempotencyKey,
+    status,
+    payload,
+    config.idempotencyTtlSeconds,
+  );
 }
 
 async function handleStorage(request, response, url) {
   if (url.pathname === '/api/storage' && request.method === 'GET') {
-    sendJson(response, 200, await getAllStorage());
-    return true;
+    return { handled: true, payload: await getAllStorage(), status: 200 };
   }
 
   if (url.pathname === '/api/storage/import' && request.method === 'POST') {
-    await importStorage(await readJson(request));
-    sendNoContent(response);
-    return true;
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    validateStorageImport(body);
+    await importStorage(body);
+    return { handled: true, payload: {}, status: 204 };
   }
 
   if (url.pathname === '/api/storage' && request.method === 'DELETE') {
     await clearStorage();
-    sendNoContent(response);
-    return true;
+    return { handled: true, payload: {}, status: 204 };
   }
 
   const key = getStorageKey(url.pathname);
   if (!key) {
-    return false;
+    return { handled: false };
   }
 
   if (request.method === 'GET') {
     const value = await getStorageValue(key);
     if (value === undefined) {
-      sendJson(response, 404, { error: 'not_found' });
-      return true;
+      throw new HttpError(404, 'not_found', 'Storage key not found');
     }
 
-    sendJson(response, 200, { key, value });
-    return true;
+    return { handled: true, payload: { key, value }, status: 200 };
   }
 
   if (request.method === 'PUT') {
-    const body = await readJson(request);
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    validateStoragePut(body);
     await setStorageValue(
       key,
       Object.prototype.hasOwnProperty.call(body, 'value') ? body.value : body,
     );
-    sendNoContent(response);
-    return true;
+    return { handled: true, payload: {}, status: 204 };
   }
 
-  return false;
+  return { handled: false };
 }
 
 async function handleGaggiuino(request, response, url) {
-  if (
-    url.pathname === '/api/gaggiuino/autosync-status' &&
-    request.method === 'GET'
-  ) {
+  if (url.pathname === '/api/gaggiuino/autosync-status' && request.method === 'GET') {
     sendJson(response, 200, await getAutoSyncState());
     return true;
   }
 
-  if (
-    url.pathname === '/api/gaggiuino/autosync-sync-now' &&
-    request.method === 'POST'
-  ) {
+  if (url.pathname === '/api/gaggiuino/autosync-sync-now' && request.method === 'POST') {
     const result = await syncNewShotsSinceLast({
       maxShotsPerRun: config.gaggiuino.autoSyncBatchSize,
       initialImportCount: config.gaggiuino.autoSyncInitialImportCount,
     });
+    metrics.syncSuccessCount += 1;
     sendJson(response, 200, {
       result: {
         imported: result.imported.length,
@@ -139,25 +296,22 @@ async function handleGaggiuino(request, response, url) {
   }
 
   if (url.pathname === '/api/gaggiuino/config' && request.method === 'PUT') {
-    sendJson(response, 200, await updateGaggiuinoSettings(await readJson(request)));
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    validateGaggiuinoConfig(body);
+    sendJson(response, 200, await updateGaggiuinoSettings(body));
     return true;
   }
 
   if (url.pathname === '/api/gaggiuino/status' && request.method === 'GET') {
     const status = await getStatus();
     if (!status) {
-      sendJson(response, 404, { error: 'not_found' });
-      return true;
+      throw new HttpError(404, 'not_found', 'Gaggiuino status not found');
     }
-
     sendJson(response, 200, status);
     return true;
   }
 
-  if (
-    url.pathname === '/api/gaggiuino/shots/latest' &&
-    request.method === 'GET'
-  ) {
+  if (url.pathname === '/api/gaggiuino/shots/latest' && request.method === 'GET') {
     sendJson(response, 200, { lastShotId: await getLatestShotId() });
     return true;
   }
@@ -167,25 +321,21 @@ async function handleGaggiuino(request, response, url) {
     return true;
   }
 
-  if (
-    url.pathname === '/api/gaggiuino/shots/import-latest' &&
-    request.method === 'POST'
-  ) {
-    const body = await readJson(request);
+  if (url.pathname === '/api/gaggiuino/shots/import-latest' && request.method === 'POST') {
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    validateImportLatestRequest(body);
     sendJson(response, 200, await importLatestShots(body.count, {
       syncToBrews: body.syncToBrews !== false,
     }));
     return true;
   }
 
-  if (
-    url.pathname === '/api/gaggiuino/shots/sync-saved' &&
-    request.method === 'POST'
-  ) {
+  if (url.pathname === '/api/gaggiuino/shots/sync-saved' && request.method === 'POST') {
     const savedShots = await getSavedShots();
     const sync = await syncShotsToBrews(
       savedShots.map((shot) => ({ id: shot.id, rawData: shot.rawData })),
     );
+    metrics.syncSuccessCount += 1;
     sendJson(response, 200, { sync });
     return true;
   }
@@ -195,8 +345,7 @@ async function handleGaggiuino(request, response, url) {
     const id = Number(match[1]);
     const shot = await getShot(id);
     if (!shot) {
-      sendJson(response, 404, { error: 'not_found' });
-      return true;
+      throw new HttpError(404, 'not_found', 'Shot not found');
     }
 
     await saveShot(id, shot);
@@ -214,9 +363,7 @@ async function handleAiAnalysis(request, response, url) {
   }
 
   if (url.pathname === '/api/ai-analysis/latest' && request.method === 'GET') {
-    sendJson(response, 200, {
-      snapshot: await getLatestSnapshot(),
-    });
+    sendJson(response, 200, { snapshot: await getLatestSnapshot() });
     return true;
   }
 
@@ -229,6 +376,7 @@ async function handleAiAnalysis(request, response, url) {
 
   if (url.pathname === '/api/ai-analysis/run-now' && request.method === 'POST') {
     const snapshot = await runAnalysis();
+    metrics.aiRunSuccessCount += 1;
     sendJson(response, 200, { snapshot });
     return true;
   }
@@ -239,7 +387,44 @@ async function handleAiAnalysis(request, response, url) {
   }
 
   if (url.pathname === '/api/ai-analysis/config' && request.method === 'PUT') {
-    sendJson(response, 200, await setAiAnalysisConfig(await readJson(request)));
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    validateAiAnalysisConfig(body);
+    sendJson(response, 200, await setAiAnalysisConfig(body));
+    return true;
+  }
+
+  return false;
+}
+
+async function handleOperationalRoutes(request, response, url) {
+  if (url.pathname === '/api/status' && request.method === 'GET') {
+    const dbReady = await checkDatabaseReady().catch(() => false);
+    sendJson(response, 200, {
+      dbReady,
+      autoSync: await getAutoSyncState(),
+      aiAnalysis: await getAiAnalysisStatus(),
+      metrics,
+    });
+    return true;
+  }
+
+  if (url.pathname === '/metrics' && request.method === 'GET' && config.metricsEnabled) {
+    sendJson(response, 200, metrics);
+    return true;
+  }
+
+  return false;
+}
+
+async function handlePublicOperationalRoutes(request, response, url) {
+  if (url.pathname === '/health' && request.method === 'GET') {
+    sendJson(response, 200, { ok: true });
+    return true;
+  }
+
+  if (url.pathname === '/ready' && request.method === 'GET') {
+    const dbReady = await checkDatabaseReady().catch(() => false);
+    sendJson(response, dbReady ? 200 : 503, { ok: dbReady });
     return true;
   }
 
@@ -247,52 +432,102 @@ async function handleAiAnalysis(request, response, url) {
 }
 
 async function route(request, response) {
+  metrics.requestCount += 1;
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
+  response.setHeader('X-Request-Id', requestId);
   applyCors(request, response, config.corsOrigins);
 
-  if (request.method === 'OPTIONS') {
-    sendNoContent(response);
-    return;
-  }
-
-  const url = new URL(
-    request.url,
-    `http://${request.headers.host || 'localhost'}`,
-  );
-
-  if (url.pathname === '/health') {
-    sendJson(response, 200, { ok: true });
-    return;
-  }
-
-  if (!isAuthorized(request)) {
-    sendJson(response, 401, { error: 'unauthorized' });
-    return;
-  }
-
-  if (await handleStorage(request, response, url)) {
-    return;
-  }
-
   try {
-    if (await handleGaggiuino(request, response, url)) {
+    if (request.method === 'OPTIONS') {
+      sendNoContent(response);
       return;
     }
-    if (await handleAiAnalysis(request, response, url)) {
+
+    const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+    if (await handlePublicOperationalRoutes(request, response, url)) {
       return;
     }
+
+    if (!isAuthorized(request)) {
+      throw new HttpError(401, 'unauthorized', 'Authentication required');
+    }
+    maybeIssueSessionCookie(request, response);
+
+    if (await handleOperationalRoutes(request, response, url)) {
+      return;
+    }
+
+    enforceRateLimit(request);
+    const idempotencyKey = getIdempotencyKey(request);
+    const cached = idempotencyKey ? await getIdempotencyEntry(idempotencyKey) : null;
+    if (cached) {
+      replayIdempotentResponse(response, cached);
+      return;
+    }
+
+    const storageResult = await handleStorage(request, response, url);
+    if (storageResult.handled) {
+      if (storageResult.status === 204) {
+        sendNoContent(response);
+      } else {
+        sendJson(response, storageResult.status, storageResult.payload);
+      }
+      await saveIdempotentResponse(
+        idempotencyKey,
+        storageResult.status,
+        storageResult.payload,
+      );
+      return;
+    }
+
+    try {
+      if (await handleGaggiuino(request, response, url)) {
+        return;
+      }
+      if (await handleAiAnalysis(request, response, url)) {
+        return;
+      }
+    } catch (error) {
+      if (error instanceof GaggiuinoConnectionError) {
+        metrics.syncFailureCount += 1;
+        throw new HttpError(503, 'gaggiuino_unavailable', error.message);
+      }
+
+      throw error;
+    }
+
+    throw new HttpError(404, 'not_found', 'Endpoint not found');
   } catch (error) {
-    if (error instanceof GaggiuinoConnectionError) {
-      sendJson(response, error.status, {
-        error: 'gaggiuino_unavailable',
-        message: error.message,
+    metrics.errorCount += 1;
+    if (error instanceof HttpError) {
+      sendError(response, error.status, error.code, error.message, requestId);
+    } else {
+      sendError(response, 500, 'internal_error', 'Internal server error', requestId);
+      log('error', 'Unhandled API error', {
+        requestId,
+        errorMessage: error.message,
       });
-      return;
     }
-
-    throw error;
+  } finally {
+    const latencyMs = Date.now() - startedAt;
+    if (latencyMs < 100) {
+      metrics.routeLatencyBuckets.lt100ms += 1;
+    } else if (latencyMs < 500) {
+      metrics.routeLatencyBuckets.lt500ms += 1;
+    } else if (latencyMs < 1000) {
+      metrics.routeLatencyBuckets.lt1000ms += 1;
+    } else {
+      metrics.routeLatencyBuckets.gte1000ms += 1;
+    }
+    log('info', 'request_complete', {
+      requestId,
+      method: request.method,
+      path: request.url,
+      status: response.statusCode,
+      latencyMs,
+    });
   }
-
-  sendJson(response, 404, { error: 'not_found' });
 }
 
 function clampInterval(value, fallback) {
@@ -307,7 +542,6 @@ function clampInterval(value, fallback) {
 function startGaggiuinoAutoSyncMonitor() {
   let timer = null;
   let running = false;
-  let consecutiveFailures = 0;
 
   const schedule = (delayMs) => {
     if (timer) clearTimeout(timer);
@@ -335,11 +569,9 @@ function startGaggiuinoAutoSyncMonitor() {
     }).catch((err) => console.error('Failed to update auto-sync state:', err));
 
     let nextDelay = config.gaggiuino.autoSyncIntervalMs;
-
     try {
       const settings = await getGaggiuinoSettings();
       if (!settings.autoSyncEnabled) {
-        consecutiveFailures = 0;
         await updateAutoSyncState({
           enabled: false,
           online: null,
@@ -348,41 +580,34 @@ function startGaggiuinoAutoSyncMonitor() {
           lastError: '',
           nextPollInMs: config.gaggiuino.autoSyncIntervalMs,
         }).catch((err) => console.error('Failed to update auto-sync state:', err));
+        nextDelay = config.gaggiuino.autoSyncIntervalMs;
         return;
       }
 
-      await getStatus();
       const result = await syncNewShotsSinceLast({
         maxShotsPerRun: config.gaggiuino.autoSyncBatchSize,
         initialImportCount: config.gaggiuino.autoSyncInitialImportCount,
       });
-
-      consecutiveFailures = 0;
+      metrics.syncSuccessCount += 1;
       await updateAutoSyncState({
         enabled: true,
         online: true,
         running: false,
-        consecutiveFailures: 0,
         lastSuccessAt: new Date().toISOString(),
         lastError: '',
         lastImportedCount: result.imported.length,
         lastSyncSummary: result.sync,
       }).catch((err) => console.error('Failed to update auto-sync state:', err));
+      nextDelay = config.gaggiuino.autoSyncIntervalMs;
     } catch (error) {
-      consecutiveFailures++;
-      const multiplier = Math.min(2 ** Math.min(consecutiveFailures, 6), 64);
-      nextDelay = Math.min(
-        config.gaggiuino.autoSyncMaxBackoffMs,
-        config.gaggiuino.autoSyncIntervalMs * multiplier,
-      );
-
+      metrics.syncFailureCount += 1;
       await updateAutoSyncState({
         enabled: true,
         online: false,
         running: false,
-        consecutiveFailures,
         lastError: error?.message || String(error),
       }).catch((err) => console.error('Failed to update auto-sync state:', err));
+      nextDelay = config.gaggiuino.autoSyncMaxBackoffMs;
     } finally {
       running = false;
       schedule(nextDelay);
@@ -395,7 +620,6 @@ function startGaggiuinoAutoSyncMonitor() {
 function startAiAnalysisMonitor() {
   let timer = null;
   let running = false;
-  let consecutiveFailures = 0;
 
   const schedule = async (delayMs) => {
     if (timer) clearTimeout(timer);
@@ -413,6 +637,7 @@ function startAiAnalysisMonitor() {
       schedule(60 * 1000).catch((err) => console.error('AI analysis schedule error:', err));
       return;
     }
+
     running = true;
     let nextDelay = 24 * 60 * 60 * 1000;
     try {
@@ -422,7 +647,6 @@ function startAiAnalysisMonitor() {
         aiConfig.cadenceHours * 60 * 60 * 1000,
         24 * 60 * 60 * 1000,
       );
-
       if (!aiConfig.enabled) {
         return;
       }
@@ -433,11 +657,10 @@ function startAiAnalysisMonitor() {
       }
 
       await runAnalysis();
-      consecutiveFailures = 0;
-    } catch (error) {
-      consecutiveFailures++;
-      const multiplier = Math.min(2 ** Math.min(consecutiveFailures, 6), 64);
-      nextDelay = Math.min(6 * 60 * 60 * 1000, nextDelay * multiplier);
+      metrics.aiRunSuccessCount += 1;
+    } catch (_error) {
+      metrics.aiRunFailureCount += 1;
+      nextDelay = Math.min(6 * 60 * 60 * 1000, nextDelay * 2);
     } finally {
       running = false;
       schedule(nextDelay).catch((err) => console.error('AI analysis schedule error:', err));
@@ -456,22 +679,30 @@ async function start() {
 
   const server = http.createServer((request, response) => {
     route(request, response).catch((error) => {
-      console.error(error);
-      sendJson(response, 500, {
-        error: 'internal_error',
-        message: error.message,
+      log('error', 'request_handler_failed', {
+        errorMessage: error?.message || String(error),
       });
+      sendError(
+        response,
+        500,
+        'internal_error',
+        'Internal server error',
+        crypto.randomUUID(),
+      );
     });
   });
 
   server.listen(config.port, () => {
-    console.log(`Beanconqueror API listening on ${config.port}`);
+    log('info', 'server_started', { port: config.port, env: config.nodeEnv });
     startGaggiuinoAutoSyncMonitor();
     startAiAnalysisMonitor();
+    setInterval(() => {
+      pruneIdempotencyEntries().catch(() => {});
+    }, 15 * 60 * 1000);
   });
 }
 
 start().catch((error) => {
-  console.error(error);
+  log('error', 'server_start_failed', { message: error.message });
   process.exit(1);
 });

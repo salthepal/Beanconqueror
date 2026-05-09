@@ -1,6 +1,7 @@
 <ion-header>
   <app-header [title]="'DETAIL_BREW' | translate">
     <app-header-dismiss-button header-slot="start" (dismissed)="dismiss()" />
+    <app-header-button header-slot="end" icon="git-compare-outline" buttonClass="big-icon-only" (clicked)="compareWithPrevious()" />
     <app-header-button header-slot="end" icon="beanconqueror-repeat" buttonClass="big-icon-only" (clicked)="repeat()" />
     <app-header-button header-slot="end" icon="create" buttonClass="big-icon-only" (clicked)="edit()" />
   </app-header>
