@@ -5,6 +5,7 @@ import { Storage } from '@ionic/storage';
 import { AppEvent } from '../classes/appEvent/appEvent';
 import { AppEventType } from '../enums/appEvent/appEvent';
 import { EventQueueService } from './queueService/queue-service.service';
+import { ApiRuntimeStateService } from './api-runtime-state.service';
 import { UILog } from './uiLog';
 
 @Injectable({
@@ -14,6 +15,7 @@ export class UIStorage {
   private readonly storage = inject(Storage);
   private eventQueue = inject(EventQueueService);
   private readonly uiLog = inject(UILog);
+  private readonly apiRuntimeState = inject(ApiRuntimeStateService);
 
   private _storage: Storage | null = null;
   private apiBaseUrl: string | null = null;
@@ -513,13 +515,28 @@ export class UIStorage {
     }
 
     if (!response.ok) {
-      throw new Error(`Server storage request failed: ${response.status}`);
+      let errorCode = 'server_error';
+      let errorMessage = `Server storage request failed: ${response.status}`;
+      try {
+        const payload = await response.json();
+        if (payload?.code) {
+          errorCode = payload.code;
+        }
+        if (payload?.message) {
+          errorMessage = payload.message;
+        }
+      } catch (_error) {}
+      this.apiRuntimeState.markStale();
+      throw new Error(`${errorCode}: ${errorMessage}`);
     }
 
     if (response.status === 204) {
+      this.apiRuntimeState.clearStale();
       return null;
     }
 
-    return await response.json();
+    const payload = await response.json();
+    this.apiRuntimeState.clearStale();
+    return payload;
   }
 }

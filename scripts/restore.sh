@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-backup_file="${1:?usage: restore.sh <backup.sql.gz> [--dry-run]}"
+backup_file="${1:?usage: restore.sh <backup.sql.gz> [--dry-run|--verify-only]}"
 mode="${2:-}"
 checksum_file="${backup_file}.sha256"
 
@@ -18,6 +18,12 @@ fi
 if [ "${mode}" = "--dry-run" ]; then
   gunzip -t "${backup_file}"
   echo "Dry run passed: gzip stream valid for ${backup_file}"
+  exit 0
+fi
+
+if [ "${mode}" = "--verify-only" ]; then
+  gunzip -t "${backup_file}"
+  echo "Verification passed for ${backup_file}"
   exit 0
 fi
 

@@ -44,6 +44,7 @@ import { UIMillStorage } from '../../services/uiMillStorage';
 import { UIPreparationStorage } from '../../services/uiPreparationStorage';
 import { UISettingsStorage } from '../../services/uiSettingsStorage';
 import { UIStatistic } from '../../services/uiStatistic';
+import { ApiRuntimeStateService } from '../../services/api-runtime-state.service';
 
 @Component({
   selector: 'statistic',
@@ -84,6 +85,7 @@ export class StatisticPage implements OnInit {
   private readonly uiSettingsStorage = inject(UISettingsStorage);
   private translate = inject(TranslateService);
   private readonly currencyService = inject(CurrencyService);
+  private readonly apiRuntimeState = inject(ApiRuntimeStateService);
 
   @ViewChild('brewChart', { static: false }) public brewChart;
   @ViewChild('brewsPerDayChart', { static: false }) public brewsPerDayChart;
@@ -118,6 +120,9 @@ export class StatisticPage implements OnInit {
   public avgExtractionSeconds = 0;
   public extractionConsistencyScore = 0;
   public avgRatio = 0;
+  public get staleDataWarning(): boolean {
+    return this.apiRuntimeState.isStaleSnapshot();
+  }
 
   public getCurrencySymbol() {
     return this.currencyService.getActualCurrencySymbol();

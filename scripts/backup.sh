@@ -2,6 +2,7 @@
 set -eu
 
 backup_dir="${1:-/backups}"
+retention_days="${BACKUP_RETENTION_DAYS:-14}"
 timestamp="$(date +%Y%m%d-%H%M%S)"
 outfile="${backup_dir}/beanconqueror-db-${DB_NAME:-beanconqueror}-${timestamp}.sql.gz"
 checksum_file="${outfile}.sha256"
@@ -24,4 +25,9 @@ fi
 echo "Created backup ${outfile}"
 if [ -f "${checksum_file}" ]; then
   echo "Created checksum ${checksum_file}"
+fi
+
+if [ "${retention_days}" -gt 0 ] 2>/dev/null; then
+  find "${backup_dir}" -type f -name "beanconqueror-db-${DB_NAME:-beanconqueror}-*.sql.gz*" -mtime +"${retention_days}" -delete || true
+  echo "Pruned backups older than ${retention_days} days in ${backup_dir}"
 fi

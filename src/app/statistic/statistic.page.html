@@ -4,6 +4,11 @@
   </app-header>
 </ion-header>
 <ion-content>
+  @if (staleDataWarning) {
+  <div class="ion-padding-horizontal ion-padding-top text-color-warning">
+    Server sync issue detected. Displayed statistics may be stale.
+  </div>
+  }
   <ion-segment scrollable="true" [(ngModel)]="segment" class="ion-padding-vertical" style="padding-top:0px;">
     <ion-segment-button value="GENERAL">
       <ion-label>{{"STATISTIC_TAB_GENERAL" | translate }}

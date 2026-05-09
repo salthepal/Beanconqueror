@@ -6,6 +6,11 @@
   </app-header>
 </ion-header>
 <ion-content #beanContent>
+  @if (staleDataWarning) {
+  <div class="ion-padding-horizontal ion-padding-top text-color-warning">
+    Server sync issue detected. Displayed bean data may be stale.
+  </div>
+  }
 
   <ion-segment (ionChange)="segmentChanged()" [(ngModel)]="bean_segment" class="ion-padding-vertical tabs">
     <ion-segment-button value="open">

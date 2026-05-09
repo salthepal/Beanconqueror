@@ -75,12 +75,26 @@ async function migrate() {
     await getPool().query(`
       CREATE TABLE IF NOT EXISTS api_idempotency (
         idempotency_key VARCHAR(255) NOT NULL PRIMARY KEY,
+        request_hash CHAR(64) NOT NULL DEFAULT '',
         response_status INT NOT NULL,
         response_payload JSON NOT NULL,
         expires_at TIMESTAMP NOT NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+
+    await getPool().query(`
+      CREATE TABLE IF NOT EXISTS api_rate_limits (
+        rate_key VARCHAR(255) NOT NULL PRIMARY KEY,
+        hit_count INT NOT NULL,
+        reset_at BIGINT NOT NULL,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await getPool().query(
+      'ALTER TABLE api_idempotency ADD COLUMN request_hash CHAR(64) NOT NULL DEFAULT ""',
+    ).catch(() => {});
   } finally {
     await getPool().query('SELECT RELEASE_LOCK(?)', [migrationLockName]);
   }
