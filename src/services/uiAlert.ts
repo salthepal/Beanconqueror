@@ -284,6 +284,46 @@ export class UIAlert {
     }
   }
 
+  public async showTextInput(
+    header: string,
+    message: string,
+    placeholder: string,
+    value = '',
+  ): Promise<string | null> {
+    const alert = await this.alertController.create({
+      header,
+      message,
+      inputs: [
+        {
+          name: 'value',
+          type: 'text',
+          placeholder,
+          value,
+        },
+      ],
+      buttons: [
+        {
+          text: this.translate.instant('CANCEL'),
+          role: 'cancel',
+        },
+        {
+          text: this.translate.instant('OK'),
+          role: 'confirm',
+        },
+      ],
+    });
+    await alert.present();
+    const result = await alert.onDidDismiss();
+    if (result.role !== 'confirm') {
+      return null;
+    }
+    const inputValue = result?.data?.values?.value;
+    if (typeof inputValue !== 'string') {
+      return null;
+    }
+    return inputValue;
+  }
+
   /**
    * Shows an alert dialog with the given message and an OK button.
    * Resolves after the alert modal was dismissed.

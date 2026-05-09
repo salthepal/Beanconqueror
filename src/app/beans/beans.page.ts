@@ -699,8 +699,10 @@ export class BeansPage implements OnDestroy {
       }
     } else {
       try {
-        const manualCode = window.prompt(
-          'Paste Beanconqueror QR link to import bean',
+        const manualCode = await this.uiAlert.showTextInput(
+          this.translate.instant('NAV_BEANS'),
+          this.translate.instant('QR_IMPORT_PASTE_LINK'),
+          this.translate.instant('QR_IMPORT_LINK_PLACEHOLDER'),
         );
         if (manualCode && manualCode.trim()) {
           await this.intenthandler.handleQRCodeLink(manualCode.trim());
