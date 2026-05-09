@@ -161,14 +161,14 @@ export class BrewAddComponent implements OnInit, OnDestroy {
     const hasConfiguredDefaultBean = openBeans.some(
       (bean) => bean.config.uuid === configuredDefaultBean,
     );
-    this.data.bean = hasConfiguredDefaultBean
-      ? configuredDefaultBean
-      : null;
-    if (!this.data.bean) {
-      // No configured default — use newest (most recently added) bean
+    if (hasConfiguredDefaultBean) {
+      this.data.bean = configuredDefaultBean;
+    } else {
       const newest = openBeans
-        .filter((b) => b?.config?.unix_timestamp)
-        .sort((a, b) => (b.config.unix_timestamp || 0) - (a.config.unix_timestamp || 0));
+        .sort(
+          (a, b) =>
+            (b.config.unix_timestamp || 0) - (a.config.unix_timestamp || 0),
+        );
       this.data.bean = newest[0]?.config?.uuid ?? openBeans[0]?.config?.uuid;
     }
 

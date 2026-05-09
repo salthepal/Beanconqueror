@@ -12,7 +12,6 @@ import {
   IonButton,
   IonButtons,
   IonContent,
-  IonFooter,
   IonHeader,
   IonIcon,
   IonItem,
@@ -123,7 +122,6 @@ register();
     IonMenuToggle,
     IonItem,
     IonLabel,
-    IonFooter,
     IonRouterOutlet,
   ],
 })
