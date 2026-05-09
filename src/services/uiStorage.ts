@@ -502,7 +502,11 @@ export class UIStorage {
       allowNotFound?: boolean;
     },
   ): Promise<any> {
+    const config = (window as any).__beanconquerorConfig;
     const headers: Record<string, string> = {};
+    if (config?.apiAuthToken) {
+      headers['X-Beanconqueror-Client-Token'] = config.apiAuthToken;
+    }
     if (options.body) {
       headers['Content-Type'] = 'application/json';
     }
