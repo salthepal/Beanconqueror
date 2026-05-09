@@ -157,13 +157,21 @@ export class BrewAddComponent implements OnInit, OnDestroy {
       .getAllEntries()
       .filter((bean) => !bean.finished)
       .sort((a, b) => a.name.localeCompare(b.name));
-    // Always default new brews to newest (most recently added) open bean.
-    const newest = openBeans
-      .filter((b) => b?.config?.unix_timestamp)
-      .sort(
-        (a, b) => (b.config.unix_timestamp || 0) - (a.config.unix_timestamp || 0),
-      );
-    this.data.bean = newest[0]?.config?.uuid ?? openBeans[0]?.config?.uuid;
+    const configuredDefaultBean = this.settings.default_bean;
+    const hasConfiguredDefaultBean = openBeans.some(
+      (bean) => bean.config.uuid === configuredDefaultBean,
+    );
+    if (hasConfiguredDefaultBean) {
+      this.data.bean = configuredDefaultBean;
+    } else {
+      const newest = openBeans
+        .filter((b) => b?.config?.unix_timestamp)
+        .sort(
+          (a, b) =>
+            (b.config.unix_timestamp || 0) - (a.config.unix_timestamp || 0),
+        );
+      this.data.bean = newest[0]?.config?.uuid ?? openBeans[0]?.config?.uuid;
+    }
 
     this.data.method_of_preparation = this.uiPreparationStorage
       .getAllEntries()
