@@ -1513,6 +1513,9 @@ export class BrewBrewingComponent implements OnInit, AfterViewInit {
     ) {
       this.data.grind_size = brew.grind_size;
     }
+    if (_template === false && !this.data.grind_size && brew.grind_size) {
+      this.data.grind_size = brew.grind_size;
+    }
     if (
       (_template === false &&
         checkData.default_last_coffee_parameters.grind_weight) ||
